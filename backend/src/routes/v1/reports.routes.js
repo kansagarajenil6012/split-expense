@@ -1,0 +1,13 @@
+import { Router } from 'express';
+import { authenticate } from '../../middleware/authenticate.js';
+import { authorizeGroup } from '../../middleware/authorize-group.js';
+import * as expensesController from '../../controllers/expenses.controller.js';
+
+const router = Router({ mergeParams: true });
+
+router.get('/summary', authenticate, authorizeGroup(), expensesController.getSummary);
+router.get('/members', authenticate, authorizeGroup(), expensesController.getMemberReport);
+router.get('/monthly', authenticate, authorizeGroup(), expensesController.getMonthlyReport);
+router.get('/categories', authenticate, authorizeGroup(), expensesController.getCategoryReport);
+
+export default router;
