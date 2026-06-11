@@ -2,7 +2,7 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   Box, AppBar, Toolbar, Typography, IconButton, Drawer, List,
   ListItemButton, ListItemIcon, ListItemText, useMediaQuery, useTheme,
-  Badge, Avatar, Menu, MenuItem, Divider, Stack, Tooltip,
+  Badge, Avatar, Menu, MenuItem, Divider, Stack, Tooltip, LinearProgress
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import DashboardRoundedIcon from '@mui/icons-material/DashboardRounded';
@@ -14,7 +14,7 @@ import AccountBalanceWalletRoundedIcon from '@mui/icons-material/AccountBalanceW
 import { useState } from 'react';
 import { useAuthStore } from '../store/auth.store.js';
 import { authApi } from '../services/api.js';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useIsFetching, useIsMutating } from '@tanstack/react-query';
 import { notificationsApi } from '../services/api.js';
 import { useFCM } from '../hooks/useFCM.js';
 
@@ -31,6 +31,10 @@ export default function MainLayout() {
   useFCM();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+  
+  const isFetching = useIsFetching();
+  const isMutating = useIsMutating();
+  const showLoader = isFetching > 0 || isMutating > 0;
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [anchorEl, setAnchorEl] = useState(null);
   const navigate = useNavigate();
@@ -161,6 +165,23 @@ export default function MainLayout() {
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+      {showLoader && (
+        <LinearProgress
+          color="secondary"
+          sx={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 9999,
+            height: 3,
+            background: 'transparent',
+            '& .MuiLinearProgress-bar': {
+              background: 'linear-gradient(90deg, #6366f1, #a855f7)',
+            }
+          }}
+        />
+      )}
       {!isMobile && (
         <Drawer
           variant="permanent"

@@ -16,6 +16,11 @@ const config = {
   },
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
   isProduction: process.env.NODE_ENV === 'production',
+  supabase: {
+    url: process.env.SUPABASE_URL || '',
+    serviceKey: process.env.SUPABASE_SERVICE_KEY || '',
+    bucket: process.env.SUPABASE_BUCKET || 'split-expense',
+  },
 };
 
 export default config;

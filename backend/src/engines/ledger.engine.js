@@ -1,22 +1,47 @@
 import ledgerRepository from '../repositories/ledger.repository.js';
 
-export function buildExpenseLedgerEntries({ groupId, expenseId, currency, paidByMemberId, participants, occurredAt }) {
+/**
+ * Build ledger entries for an expense.
+ * Supports multiple payers via the `payers` array.
+ * Falls back to single `paidByMemberId` for backward compatibility.
+ */
+export function buildExpenseLedgerEntries({ groupId, expenseId, currency, paidByMemberId, payers, participants, occurredAt }) {
   const entries = [];
 
   const totalShares = participants.reduce((s, p) => s + parseFloat(p.shareAmount), 0);
 
-  entries.push({
-    groupId,
-    memberId: paidByMemberId,
-    entryType: 'expense_credit',
-    amount: -totalShares,
-    currency,
-    referenceType: 'expense',
-    referenceId: expenseId,
-    description: 'Paid for expense',
-    occurredAt,
-  });
+  // Credit entries for payer(s)
+  if (payers && payers.length > 0) {
+    // Multiple payers
+    for (const payer of payers) {
+      entries.push({
+        groupId,
+        memberId: payer.memberId,
+        entryType: 'expense_credit',
+        amount: -parseFloat(payer.amount),
+        currency,
+        referenceType: 'expense',
+        referenceId: expenseId,
+        description: 'Paid for expense',
+        occurredAt,
+      });
+    }
+  } else {
+    // Single payer (backward compatible)
+    entries.push({
+      groupId,
+      memberId: paidByMemberId,
+      entryType: 'expense_credit',
+      amount: -totalShares,
+      currency,
+      referenceType: 'expense',
+      referenceId: expenseId,
+      description: 'Paid for expense',
+      occurredAt,
+    });
+  }
 
+  // Debit entries for each participant
   for (const p of participants) {
     entries.push({
       groupId,

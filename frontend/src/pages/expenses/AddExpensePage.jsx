@@ -2,17 +2,33 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import {
   Box, Typography, TextField, Button, Card, CardContent, Grid2 as Grid,
-  MenuItem, FormControlLabel, Checkbox, Alert, Divider, IconButton
+  MenuItem, FormControlLabel, Checkbox, Alert, Divider, IconButton,
+  Stack, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
+  Chip, List, ListItem, ListItemText, ListItemSecondaryAction, Select, FormControl, InputLabel
 } from '@mui/material';
 import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
-import { useForm, Controller } from 'react-hook-form';
+import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import CloseIcon from '@mui/icons-material/Close';
+import { useForm, Controller, useFieldArray } from 'react-hook-form';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useDropzone } from 'react-dropzone';
 import { expensesApi, groupsApi, eventsApi, corporateApi } from '../../services/api.js';
-import { SPLIT_TYPES, formatCurrency } from '../../utils/formatters.js';
+import { formatCurrency } from '../../utils/formatters.js';
 import { getErrorMessage } from '../../services/api-client.js';
 import { useUIStore } from '../../store/ui.store.js';
 import dayjs from 'dayjs';
+
+const EXTENDED_SPLIT_TYPES = [
+  { value: 'equal', label: 'Equally' },
+  { value: 'unequal', label: 'Unequally (Exact amounts)' },
+  { value: 'percentage', label: 'By Percentage' },
+  { value: 'shares', label: 'By Shares' },
+  { value: 'item_wise', label: 'Item-wise' },
+  { value: 'days_wise', label: 'Days-wise' },
+  { value: 'consumption_wise', label: 'Consumption-wise' },
+  { value: 'hybrid', label: 'Hybrid Split' },
+];
 
 export default function AddExpensePage() {
   const { groupId } = useParams();
@@ -25,9 +41,26 @@ export default function AddExpensePage() {
   const [error, setError] = useState('');
   const showToast = useUIStore((s) => s.showToast);
 
-  const [itemizedItems, setItemizedItems] = useState([{ id: Date.now().toString(), name: '', amount: '', participants: [] }]);
-  const [itemizedTax, setItemizedTax] = useState('');
-  const [itemizedTip, setItemizedTip] = useState('');
+  // Attachments state
+  const [attachments, setAttachments] = useState([]);
+  
+  // Duplicate check warning state
+  const [duplicateWarningOpen, setDuplicateWarningOpen] = useState(false);
+  const [pendingSubmitData, setPendingSubmitData] = useState(null);
+
+  // Multiple payers state
+  const [isMultiplePayers, setIsMultiplePayers] = useState(false);
+  const [multiplePayersData, setMultiplePayersData] = useState({});
+
+  // Item-wise state
+  const [itemWiseItems, setItemWiseItems] = useState([
+    { id: Date.now().toString(), name: '', amount: '', participants: [] }
+  ]);
+
+  // Days-wise, Consumption-wise, Hybrid states
+  const [memberDaysData, setMemberDaysData] = useState({});
+  const [memberConsumptionData, setMemberConsumptionData] = useState({});
+  const [hybridConfigData, setHybridConfigData] = useState({});
 
   const { data: members } = useQuery({
     queryKey: ['members', groupId],
@@ -82,20 +115,33 @@ export default function AddExpensePage() {
   const watchSplitType = watch('splitType');
   const watchParticipants = watch('participants') || {};
 
+  // Initialize helpers on members load
   useEffect(() => {
-    if (members && Object.keys(watchParticipants).length === 0) {
+    if (members) {
       const initialParticipants = {};
+      const initialDays = {};
+      const initialConsumption = {};
+      const initialHybrid = {};
+      const initialPayers = {};
+
       members.forEach((m) => {
-        initialParticipants[m.id] = {
-          isIncluded: true,
-          value: '',
-        };
+        initialParticipants[m.id] = { isIncluded: true, value: '' };
+        initialDays[m.id] = 1;
+        initialConsumption[m.id] = 1;
+        initialHybrid[m.id] = { method: 'equal', value: '' };
+        initialPayers[m.id] = '';
       });
+
+      setMemberDaysData(initialDays);
+      setMemberConsumptionData(initialConsumption);
+      setHybridConfigData(initialHybrid);
+      setMultiplePayersData(initialPayers);
+
       reset({
         title: '',
         amount: '',
         expenseDate: dayjs().format('YYYY-MM-DD'),
-        paidByMemberId: '',
+        paidByMemberId: members[0]?.id || '',
         categoryId: '',
         eventId: queryEventId,
         costCenterId: queryCostCenterId,
@@ -108,9 +154,25 @@ export default function AddExpensePage() {
     }
   }, [members, reset, queryEventId, queryCostCenterId]);
 
-  const calculateIndividualShare = (memberId) => {
-    if (watchAmount <= 0) return 0;
+  // Dropzone config for files
+  const { getRootProps, getInputProps } = useDropzone({
+    accept: {
+      'image/*': [],
+      'application/pdf': []
+    },
+    maxFiles: 5,
+    onDrop: (acceptedFiles) => {
+      setAttachments([...attachments, ...acceptedFiles].slice(0, 5));
+    }
+  });
 
+  const removeAttachment = (index) => {
+    setAttachments(attachments.filter((_, i) => i !== index));
+  };
+
+  // Live Preview calculation
+  const getSplitAmount = (memberId) => {
+    if (watchAmount <= 0) return 0;
     const activeMembers = members?.filter((m) => watchParticipants[m.id]?.isIncluded) || [];
     if (activeMembers.length === 0) return 0;
 
@@ -131,55 +193,82 @@ export default function AddExpensePage() {
     }
 
     if (watchSplitType === 'shares') {
-      const activeShares = activeMembers.map((m) => {
-        const val = parseFloat(watchParticipants[m.id]?.value);
-        return isNaN(val) || val <= 0 ? 1 : val;
-      });
-      const totalShares = activeShares.reduce((sum, val) => sum + val, 0);
-      if (totalShares <= 0) return 0;
+      const activeSharesSum = activeMembers.reduce((sum, m) => {
+        const val = parseFloat(watchParticipants[m.id]?.value || 1);
+        return sum + (isNaN(val) || val <= 0 ? 1 : val);
+      }, 0);
+      if (activeSharesSum <= 0) return 0;
 
-      const myShares = parseFloat(watchParticipants[memberId]?.value);
+      const myShares = parseFloat(watchParticipants[memberId]?.value || 1);
       const sharesToUse = isNaN(myShares) || myShares <= 0 ? 1 : myShares;
-      return (sharesToUse / totalShares) * watchAmount;
+      return (sharesToUse / activeSharesSum) * watchAmount;
     }
 
-    if (watchSplitType === 'itemized') {
-      let memberSubtotal = 0;
-      let totalSubtotal = 0;
+    if (watchSplitType === 'days_wise') {
+      const activeDaysSum = activeMembers.reduce((sum, m) => sum + parseFloat(memberDaysData[m.id] || 0), 0);
+      if (activeDaysSum <= 0) return 0;
+      return ((parseFloat(memberDaysData[memberId] || 0)) / activeDaysSum) * watchAmount;
+    }
 
-      itemizedItems.forEach(item => {
-        const amt = parseFloat(item.amount) || 0;
-        totalSubtotal += amt;
-        if (item.participants?.includes(memberId) && item.participants.length > 0) {
-          memberSubtotal += amt / item.participants.length;
+    if (watchSplitType === 'consumption_wise') {
+      const activeUnitsSum = activeMembers.reduce((sum, m) => sum + parseFloat(memberConsumptionData[m.id] || 0), 0);
+      if (activeUnitsSum <= 0) return 0;
+      return ((parseFloat(memberConsumptionData[memberId] || 0)) / activeUnitsSum) * watchAmount;
+    }
+
+    if (watchSplitType === 'item_wise') {
+      let memberShare = 0;
+      itemWiseItems.forEach((item) => {
+        const itemAmount = parseFloat(item.amount) || 0;
+        const itemParts = item.participants || [];
+        if (itemParts.includes(memberId) && itemParts.length > 0) {
+          memberShare += itemAmount / itemParts.length;
         }
       });
+      return memberShare;
+    }
 
-      if (totalSubtotal <= 0) return 0;
-      
-      const taxAmt = parseFloat(itemizedTax) || 0;
-      const tipAmt = parseFloat(itemizedTip) || 0;
-      
-      const memberProportion = memberSubtotal / totalSubtotal;
-      return memberSubtotal + (memberProportion * taxAmt) + (memberProportion * tipAmt);
+    if (watchSplitType === 'hybrid') {
+      const configs = activeMembers.map(m => ({
+        memberId: m.id,
+        method: hybridConfigData[m.id]?.method || 'equal',
+        value: parseFloat(hybridConfigData[m.id]?.value || 0),
+      }));
+
+      const fixed = configs.filter(c => c.method === 'fixed');
+      const percentage = configs.filter(c => c.method === 'percentage');
+      const equal = configs.filter(c => c.method === 'equal');
+
+      const fixedTotal = fixed.reduce((s, c) => s + c.value, 0);
+      if (fixedTotal > watchAmount) return 0;
+
+      let remaining = watchAmount - fixedTotal;
+
+      const pctTotal = percentage.reduce((s, c) => s + c.value, 0);
+      if (pctTotal > 100) return 0;
+
+      const myConfig = configs.find(c => c.memberId === memberId);
+      if (!myConfig) return 0;
+
+      if (myConfig.method === 'fixed') return myConfig.value;
+      if (myConfig.method === 'percentage') return (myConfig.value / 100) * remaining;
+
+      const pctSpent = percentage.reduce((s, c) => s + (c.value / 100) * remaining, 0);
+      const equalRemaining = remaining - pctSpent;
+      if (equalRemaining < 0) return 0;
+
+      if (myConfig.method === 'equal' && equal.length > 0) {
+        return equalRemaining / equal.length;
+      }
     }
 
     return 0;
   };
 
-  const getSplitAmount = (memberId) => {
-    return calculateIndividualShare(memberId);
-  };
-
   const getSplitValidation = () => {
     const activeMembers = members?.filter((m) => watchParticipants[m.id]?.isIncluded) || [];
-
     if (activeMembers.length === 0) {
       return { isValid: false, message: 'Select at least one participant.' };
-    }
-
-    if (watchSplitType === 'equal') {
-      return { isValid: true };
     }
 
     if (watchSplitType === 'unequal') {
@@ -191,7 +280,6 @@ export default function AddExpensePage() {
           message: `Sum of amounts (${formatCurrency(totalAllocated, group?.currency)}) must equal total amount (${formatCurrency(watchAmount, group?.currency)}). Difference: ${formatCurrency(diff, group?.currency)}`,
         };
       }
-      return { isValid: true };
     }
 
     if (watchSplitType === 'percentage') {
@@ -203,42 +291,56 @@ export default function AddExpensePage() {
           message: `Sum of percentages (${totalPct.toFixed(2)}%) must equal 100%. Difference: ${diff.toFixed(2)}%`,
         };
       }
-      return { isValid: true };
     }
 
-    if (watchSplitType === 'shares') {
-      const anyInvalid = activeMembers.some((m) => {
-        const val = watchParticipants[m.id]?.value;
-        if (val !== undefined && val !== '') {
-          const parsed = parseFloat(val);
-          return isNaN(parsed) || parsed <= 0;
-        }
-        return false;
-      });
-      if (anyInvalid) {
-        return { isValid: false, message: 'Shares must be positive numbers.' };
-      }
-      return { isValid: true };
-    }
-
-    if (watchSplitType === 'itemized') {
-      let totalItems = 0;
+    if (watchSplitType === 'item_wise') {
+      let itemsTotal = 0;
       let anyInvalid = false;
-      itemizedItems.forEach(i => {
-        if (!i.name || !i.amount || !i.participants || i.participants.length === 0) anyInvalid = true;
-        totalItems += parseFloat(i.amount) || 0;
+      itemWiseItems.forEach((item) => {
+        if (!item.name || !item.amount || !item.participants || item.participants.length === 0) {
+          anyInvalid = true;
+        }
+        itemsTotal += parseFloat(item.amount) || 0;
       });
-      if (anyInvalid) return { isValid: false, message: 'All items must have a name, an amount, and at least 1 person assigned.' };
-      
-      const taxAmt = parseFloat(itemizedTax) || 0;
-      const tipAmt = parseFloat(itemizedTip) || 0;
-      const grandTotal = totalItems + taxAmt + tipAmt;
-      
-      const diff = watchAmount - grandTotal;
-      if (Math.abs(diff) > 0.01) {
-         return { isValid: false, message: `Sum of items + tax + tip (${formatCurrency(grandTotal, group?.currency)}) must equal total expense amount (${formatCurrency(watchAmount, group?.currency)}). Difference: ${formatCurrency(diff, group?.currency)}`};
+
+      if (anyInvalid) {
+        return { isValid: false, message: 'All items must have a name, amount, and at least 1 shared member assigned.' };
       }
-      return { isValid: true };
+
+      const diff = watchAmount - itemsTotal;
+      if (Math.abs(diff) > 0.01) {
+        return {
+          isValid: false,
+          message: `Sum of item amounts (${formatCurrency(itemsTotal, group?.currency)}) must equal total expense amount (${formatCurrency(watchAmount, group?.currency)}). Difference: ${formatCurrency(diff, group?.currency)}`,
+        };
+      }
+    }
+
+    if (watchSplitType === 'hybrid') {
+      const activeConfigs = activeMembers.map(m => ({
+        method: hybridConfigData[m.id]?.method || 'equal',
+        value: parseFloat(hybridConfigData[m.id]?.value || 0),
+      }));
+      const fixedTotal = activeConfigs.filter(c => c.method === 'fixed').reduce((s, c) => s + c.value, 0);
+      const pctTotal = activeConfigs.filter(c => c.method === 'percentage').reduce((s, c) => s + c.value, 0);
+
+      if (fixedTotal > watchAmount) {
+        return { isValid: false, message: `Fixed amounts (${formatCurrency(fixedTotal, group?.currency)}) exceed total expense amount.` };
+      }
+      if (pctTotal > 100) {
+        return { isValid: false, message: `Percentages (${pctTotal}%) exceed 100%.` };
+      }
+    }
+
+    if (isMultiplePayers) {
+      const payersSum = Object.values(multiplePayersData).reduce((sum, val) => sum + parseFloat(val || 0), 0);
+      const diff = watchAmount - payersSum;
+      if (Math.abs(diff) > 0.01) {
+        return {
+          isValid: false,
+          message: `Sum of payer amounts (${formatCurrency(payersSum, group?.currency)}) must equal total amount (${formatCurrency(watchAmount, group?.currency)}). Difference: ${formatCurrency(diff, group?.currency)}`,
+        };
+      }
     }
 
     return { isValid: true };
@@ -248,8 +350,29 @@ export default function AddExpensePage() {
 
   const createMutation = useMutation({
     mutationFn: (data) => expensesApi.create(groupId, data),
-    onSuccess: () => {
-      showToast('Expense added successfully');
+    onSuccess: async (res) => {
+      // If backend returns a duplicate warning (intercepted success)
+      if (res.data?.duplicateWarning) {
+        setPendingSubmitData(res.config.data);
+        setDuplicateWarningOpen(true);
+        return;
+      }
+
+      const createdExpense = res.data.data;
+      showToast('Expense created successfully');
+
+      // Upload attachments if any
+      if (attachments.length > 0) {
+        showToast('Uploading attachments...', 'info');
+        for (const file of attachments) {
+          try {
+            await expensesApi.uploadAttachment(groupId, createdExpense.id, file);
+          } catch (e) {
+            console.error('Attachment upload failed', e);
+          }
+        }
+      }
+
       queryClient.invalidateQueries({ queryKey: ['expenses', groupId] });
       queryClient.invalidateQueries({ queryKey: ['balances', groupId] });
       navigate(`/groups/${groupId}/expenses`);
@@ -257,7 +380,7 @@ export default function AddExpensePage() {
     onError: (err) => setError(getErrorMessage(err)),
   });
 
-  const onSubmit = (formData) => {
+  const handleCreateSubmit = (formData, isDraft = false) => {
     setError('');
     const validationCheck = getSplitValidation();
     if (!validationCheck.isValid) {
@@ -265,58 +388,102 @@ export default function AddExpensePage() {
       return;
     }
 
-    let participants = [];
-    let payloadSplitType = formData.splitType;
-    let payloadNotes = undefined;
-
-    if (formData.splitType === 'itemized') {
-      payloadSplitType = 'unequal';
-      const activeMembers = members?.filter((m) => watchParticipants[m.id]?.isIncluded) || [];
-      participants = activeMembers.map((m) => ({
-        memberId: m.id,
-        isIncluded: true,
-        shareAmount: parseFloat(getSplitAmount(m.id).toFixed(2)),
-      }));
-      payloadNotes = JSON.stringify({ itemizedItems, itemizedTax, itemizedTip });
-    } else {
-      participants = Object.entries(formData.participants)
-        .filter(([_, item]) => item.isIncluded)
-        .map(([memberId, item]) => {
-          const payloadItem = {
-            memberId,
-            isIncluded: true,
-          };
-          if (formData.splitType === 'unequal') {
-            payloadItem.shareAmount = parseFloat(item.value);
-          } else if (formData.splitType === 'percentage') {
-            payloadItem.sharePercentage = parseFloat(item.value);
-          } else if (formData.splitType === 'shares') {
-            payloadItem.shareUnits = parseFloat(item.value || 1);
-          }
-          return payloadItem;
-        });
+    const activeMembers = members?.filter((m) => watchParticipants[m.id]?.isIncluded) || [];
+    
+    // Construct Payers payload
+    let payers = undefined;
+    if (isMultiplePayers) {
+      payers = Object.entries(multiplePayersData)
+        .map(([memberId, amount]) => ({ memberId, amount: parseFloat(amount || 0) }))
+        .filter(p => p.amount > 0);
     }
+
+    // Construct Participants payload
+    const participants = activeMembers.map((m) => {
+      const pData = { memberId: m.id, isIncluded: true };
+      if (watchSplitType === 'unequal') pData.shareAmount = parseFloat(watchParticipants[m.id]?.value || 0);
+      if (watchSplitType === 'percentage') pData.sharePercentage = parseFloat(watchParticipants[m.id]?.value || 0);
+      if (watchSplitType === 'shares') pData.shareUnits = parseFloat(watchParticipants[m.id]?.value || 1);
+      return pData;
+    });
+
+    // Custom Split details payloads
+    const items = watchSplitType === 'item_wise'
+      ? itemWiseItems.map(item => ({
+          name: item.name,
+          amount: parseFloat(item.amount),
+          quantity: 1,
+          participants: item.participants.map(memberId => ({ memberId }))
+        }))
+      : undefined;
+
+    const memberDays = watchSplitType === 'days_wise'
+      ? activeMembers.map(m => ({ memberId: m.id, days: parseFloat(memberDaysData[m.id] || 0) }))
+      : undefined;
+
+    const memberConsumption = watchSplitType === 'consumption_wise'
+      ? activeMembers.map(m => ({ memberId: m.id, units: parseFloat(memberConsumptionData[m.id] || 0) }))
+      : undefined;
+
+    const hybridConfig = watchSplitType === 'hybrid'
+      ? activeMembers.map(m => ({
+          memberId: m.id,
+          method: hybridConfigData[m.id]?.method || 'equal',
+          value: parseFloat(hybridConfigData[m.id]?.value || 0)
+        }))
+      : undefined;
 
     createMutation.mutate({
       title: formData.title,
       amount: parseFloat(formData.amount),
       expenseDate: formData.expenseDate,
-      paidByMemberId: formData.paidByMemberId,
+      paidByMemberId: isMultiplePayers ? undefined : formData.paidByMemberId,
+      payers,
       categoryId: formData.categoryId || null,
       eventId: formData.eventId || null,
       costCenterId: formData.costCenterId || null,
       projectName: formData.projectName || null,
       approvalStatus: formData.approvalStatus || 'approved',
-      splitType: payloadSplitType,
+      splitType: watchSplitType,
       description: formData.description,
-      notes: payloadNotes,
+      isDraft,
       participants,
+      items,
+      memberDays,
+      memberConsumption,
+      hybridConfig,
     });
   };
 
+  const forceSubmit = async () => {
+    setDuplicateWarningOpen(false);
+    if (!pendingSubmitData) return;
+
+    try {
+      const parsedData = JSON.parse(pendingSubmitData);
+      parsedData.skipDuplicateCheck = true;
+      
+      const res = await expensesApi.create(groupId, parsedData);
+      showToast('Expense created successfully');
+
+      const createdExpense = res.data.data;
+      if (attachments.length > 0) {
+        for (const file of attachments) {
+          await expensesApi.uploadAttachment(groupId, createdExpense.id, file);
+        }
+      }
+
+      queryClient.invalidateQueries({ queryKey: ['expenses', groupId] });
+      queryClient.invalidateQueries({ queryKey: ['balances', groupId] });
+      navigate(`/groups/${groupId}/expenses`);
+    } catch (e) {
+      setError(getErrorMessage(e));
+    }
+  };
+
   return (
-    <Box maxWidth={700}>
-      <Typography variant="h6" fontWeight={600} gutterBottom>Add Expense</Typography>
+    <Box maxWidth={750}>
+      <Typography variant="h5" fontWeight={700} gutterBottom>Add Expense</Typography>
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {!validation.isValid && watchAmount > 0 && (
@@ -324,8 +491,8 @@ export default function AddExpensePage() {
       )}
 
       <Card>
-        <CardContent>
-          <Box component="form" onSubmit={handleSubmit(onSubmit)}>
+        <CardContent sx={{ p: 3 }}>
+          <Box component="form">
             <Grid container spacing={2}>
               <Grid size={{ xs: 12 }}>
                 <TextField fullWidth label="Title" required {...register('title')} />
@@ -336,13 +503,44 @@ export default function AddExpensePage() {
               <Grid size={{ xs: 12, sm: 6 }}>
                 <TextField fullWidth label="Date" type="date" required InputLabelProps={{ shrink: true }} {...register('expenseDate')} />
               </Grid>
-              <Grid size={{ xs: 12, sm: 6 }}>
-                <TextField fullWidth select label="Paid by" required {...register('paidByMemberId')}>
-                  {members?.map((m) => (
-                    <MenuItem key={m.id} value={m.id}>{m.full_name}</MenuItem>
-                  ))}
-                </TextField>
+
+              {/* Payers field */}
+              <Grid size={{ xs: 12 }}>
+                <FormControlLabel
+                  control={<Checkbox checked={isMultiplePayers} onChange={(e) => setIsMultiplePayers(e.target.checked)} />}
+                  label="Multiple Payers paid for this expense"
+                />
               </Grid>
+
+              {isMultiplePayers ? (
+                <Grid size={{ xs: 12 }}>
+                  <Card variant="outlined" sx={{ p: 2, bgcolor: 'rgba(139, 92, 246, 0.02)', borderColor: 'rgba(139, 92, 246, 0.12)' }}>
+                    <Typography variant="subtitle2" fontWeight={600} gutterBottom>Payer Breakdown</Typography>
+                    {members?.map((m) => (
+                      <Box key={m.id} display="flex" alignItems="center" justifyContent="space-between" mb={1.5}>
+                        <Typography variant="body2">{m.full_name}</Typography>
+                        <TextField
+                          size="small"
+                          type="number"
+                          label={`Amount Paid (${group?.currency})`}
+                          value={multiplePayersData[m.id] || ''}
+                          onChange={(e) => setMultiplePayersData({ ...multiplePayersData, [m.id]: e.target.value })}
+                          sx={{ width: 200 }}
+                        />
+                      </Box>
+                    ))}
+                  </Card>
+                </Grid>
+              ) : (
+                <Grid size={{ xs: 12, sm: 6 }}>
+                  <TextField fullWidth select label="Paid by" required {...register('paidByMemberId')}>
+                    {members?.map((m) => (
+                      <MenuItem key={m.id} value={m.id}>{m.full_name}</MenuItem>
+                    ))}
+                  </TextField>
+                </Grid>
+              )}
+
               <Grid size={{ xs: 12, sm: 6 }}>
                 <TextField fullWidth select label="Category" {...register('categoryId')}>
                   <MenuItem value="">None</MenuItem>
@@ -352,12 +550,13 @@ export default function AddExpensePage() {
                 </TextField>
               </Grid>
               <Grid size={{ xs: 12 }}>
-                <TextField fullWidth select label="Split Type" {...register('splitType')}>
-                  {SPLIT_TYPES.map((s) => (
+                <TextField fullWidth select label="Split Method" {...register('splitType')}>
+                  {EXTENDED_SPLIT_TYPES.map((s) => (
                     <MenuItem key={s.value} value={s.value}>{s.label}</MenuItem>
                   ))}
                 </TextField>
               </Grid>
+
               <Grid size={{ xs: 12, sm: 6 }}>
                 <TextField fullWidth select label="Link to Event/Trip" {...register('eventId')}>
                   <MenuItem value="">None</MenuItem>
@@ -390,62 +589,128 @@ export default function AddExpensePage() {
               </Grid>
             </Grid>
 
+            {/* Attachments Dropzone */}
+            <Divider sx={{ my: 3 }} />
+            <Typography variant="subtitle1" fontWeight={600} gutterBottom>Attachments</Typography>
+            <Box
+              {...getRootProps()}
+              sx={{
+                border: '2px dashed rgba(139, 92, 246, 0.25)',
+                borderRadius: 2,
+                p: 3,
+                textAlign: 'center',
+                cursor: 'pointer',
+                bgcolor: 'rgba(139, 92, 246, 0.02)',
+                transition: 'all 0.2s ease',
+                '&:hover': { bgcolor: 'rgba(139, 92, 246, 0.06)', borderColor: '#818cf8' }
+              }}
+            >
+              <input {...getInputProps()} />
+              <CloudUploadIcon sx={{ fontSize: 40, color: 'text.secondary', mb: 1 }} />
+              <Typography variant="body2" color="text.secondary">
+                Drag and drop receipts or bills here, or click to upload
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                Upload up to 5 images or PDFs (max 10MB per file)
+              </Typography>
+            </Box>
+
+            {attachments.length > 0 && (
+              <Stack direction="row" spacing={1} sx={{ mt: 2, flexWrap: 'wrap', gap: 1 }}>
+                {attachments.map((file, idx) => (
+                  <Chip
+                    key={idx}
+                    label={file.name}
+                    onDelete={() => removeAttachment(idx)}
+                    deleteIcon={<CloseIcon />}
+                  />
+                ))}
+              </Stack>
+            )}
+
+            {/* Split Breakdown */}
             <Divider sx={{ my: 3 }} />
             <Typography variant="subtitle1" fontWeight={600} gutterBottom>Split Breakdown</Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Choose who is included and customize their share of the expense.
+              Choose who is included and configure how much they pay.
             </Typography>
 
             <Grid container spacing={2}>
-              {watchSplitType === 'itemized' ? (
+              {watchSplitType === 'item_wise' ? (
                 <Grid size={{ xs: 12 }}>
-                  <Box sx={{ p: 3, bgcolor: 'background.paper', borderRadius: 2, border: '1px solid', borderColor: 'divider', mb: 3 }}>
-                    <Typography variant="subtitle2" gutterBottom>Receipt Items</Typography>
-                    {itemizedItems.map((item, idx) => (
-                      <Box key={item.id} sx={{ display: 'flex', gap: 2, mb: 2, alignItems: 'center', flexWrap: 'wrap' }}>
-                        <TextField size="small" label="Item Name" value={item.name} onChange={(e) => {
-                          const newItems = [...itemizedItems];
-                          newItems[idx].name = e.target.value;
-                          setItemizedItems(newItems);
-                        }} sx={{ flex: 2, minWidth: 150 }} />
-                        <TextField size="small" label="Amount" type="number" inputProps={{ min: 0, step: 0.01 }} value={item.amount} onChange={(e) => {
-                          const newItems = [...itemizedItems];
-                          newItems[idx].amount = e.target.value;
-                          setItemizedItems(newItems);
-                        }} sx={{ flex: 1, minWidth: 100 }} />
-                        <TextField size="small" select label="Shared By" SelectProps={{ multiple: true }} value={item.participants} onChange={(e) => {
-                          const newItems = [...itemizedItems];
-                          newItems[idx].participants = e.target.value;
-                          setItemizedItems(newItems);
-                        }} sx={{ flex: 2, minWidth: 200 }}>
-                          {members?.map(m => <MenuItem key={m.id} value={m.id}>{m.full_name}</MenuItem>)}
-                        </TextField>
-                        <IconButton color="error" onClick={() => setItemizedItems(itemizedItems.filter((_, i) => i !== idx))}><DeleteRoundedIcon /></IconButton>
+                  <Box sx={{ p: 2, bgcolor: 'rgba(139, 92, 246, 0.03)', borderRadius: 2, border: '1px solid rgba(139, 92, 246, 0.15)', mb: 3 }}>
+                    <Typography variant="subtitle2" fontWeight={600} gutterBottom>Items in Receipt</Typography>
+                    {itemWiseItems.map((item, idx) => (
+                      <Box key={item.id} sx={{ display: 'flex', gap: 1.5, mb: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <TextField
+                          size="small"
+                          label="Item Name"
+                          value={item.name}
+                          onChange={(e) => {
+                            const newItems = [...itemWiseItems];
+                            newItems[idx].name = e.target.value;
+                            setItemWiseItems(newItems);
+                          }}
+                          sx={{ flex: 2, minWidth: 150 }}
+                        />
+                        <TextField
+                          size="small"
+                          label="Amount"
+                          type="number"
+                          value={item.amount}
+                          onChange={(e) => {
+                            const newItems = [...itemWiseItems];
+                            newItems[idx].amount = e.target.value;
+                            setItemWiseItems(newItems);
+                          }}
+                          sx={{ flex: 1, minWidth: 100 }}
+                        />
+                        <FormControl size="small" sx={{ flex: 2, minWidth: 200 }}>
+                          <InputLabel>Shared By</InputLabel>
+                          <Select
+                            multiple
+                            value={item.participants}
+                            label="Shared By"
+                            onChange={(e) => {
+                              const newItems = [...itemWiseItems];
+                              newItems[idx].participants = e.target.value;
+                              setItemWiseItems(newItems);
+                            }}
+                            renderValue={(selected) => (
+                              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                                {selected.map((val) => (
+                                  <Chip
+                                    key={val}
+                                    label={members?.find(m => m.id === val)?.full_name || val}
+                                    size="small"
+                                  />
+                                ))}
+                              </Box>
+                            )}
+                          >
+                            {members?.map((m) => (
+                              <MenuItem key={m.id} value={m.id}>{m.full_name}</MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                        <IconButton
+                          color="error"
+                          onClick={() => setItemWiseItems(itemWiseItems.filter((_, i) => i !== idx))}
+                          disabled={itemWiseItems.length === 1}
+                        >
+                          <DeleteRoundedIcon />
+                        </IconButton>
                       </Box>
                     ))}
-                    <Button size="small" variant="outlined" startIcon={<AddRoundedIcon />} onClick={() => setItemizedItems([...itemizedItems, { id: Date.now().toString(), name: '', amount: '', participants: [] }])}>Add Item</Button>
-                    
-                    <Divider sx={{ my: 3 }} />
-                    <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                      <TextField size="small" label="Total Tax" type="number" inputProps={{ min: 0, step: 0.01 }} value={itemizedTax} onChange={(e) => setItemizedTax(e.target.value)} sx={{ flex: 1 }} />
-                      <TextField size="small" label="Total Tip" type="number" inputProps={{ min: 0, step: 0.01 }} value={itemizedTip} onChange={(e) => setItemizedTip(e.target.value)} sx={{ flex: 1 }} />
-                    </Box>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      startIcon={<AddRoundedIcon />}
+                      onClick={() => setItemWiseItems([...itemWiseItems, { id: Date.now().toString(), name: '', amount: '', participants: [] }])}
+                    >
+                      Add Item
+                    </Button>
                   </Box>
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>Final Calculated Shares (including proportional tax/tip):</Typography>
-                  <Card variant="outlined">
-                    <CardContent sx={{ p: 2, pb: '16px !important' }}>
-                      {members?.map(m => {
-                        const share = getSplitAmount(m.id);
-                        if (share <= 0) return null;
-                        return (
-                          <Box key={m.id} sx={{ display: 'flex', justifyContent: 'space-between', py: 0.5 }}>
-                            <Typography>{m.full_name}</Typography>
-                            <Typography fontWeight={600} color="primary.main">{formatCurrency(share, group?.currency)}</Typography>
-                          </Box>
-                        );
-                      })}
-                    </CardContent>
-                  </Card>
                 </Grid>
               ) : (
                 members?.map((m) => {
@@ -470,7 +735,7 @@ export default function AddExpensePage() {
                           sx={{ flex: 1, margin: 0 }}
                         />
 
-                        {isIncluded && watchSplitType !== 'equal' && (
+                        {isIncluded && watchSplitType === 'unequal' && (
                           <Controller
                             name={`participants.${m.id}.value`}
                             control={control}
@@ -478,21 +743,106 @@ export default function AddExpensePage() {
                               <TextField
                                 size="small"
                                 type="number"
-                                label={
-                                  watchSplitType === 'unequal' ? `Amount (${group?.currency})` :
-                                  watchSplitType === 'percentage' ? 'Percent (%)' : 'Shares'
-                                }
+                                label={`Amount (${group?.currency})`}
                                 required
-                                inputProps={{
-                                  min: 0.01,
-                                  step: watchSplitType === 'shares' ? 1 : 0.01,
-                                }}
                                 value={field.value ?? ''}
                                 onChange={(e) => field.onChange(e.target.value)}
-                                sx={{ width: 150 }}
+                                sx={{ width: 160 }}
                               />
                             )}
                           />
+                        )}
+
+                        {isIncluded && watchSplitType === 'percentage' && (
+                          <Controller
+                            name={`participants.${m.id}.value`}
+                            control={control}
+                            render={({ field }) => (
+                              <TextField
+                                size="small"
+                                type="number"
+                                label="Percent (%)"
+                                required
+                                value={field.value ?? ''}
+                                onChange={(e) => field.onChange(e.target.value)}
+                                sx={{ width: 160 }}
+                              />
+                            )}
+                          />
+                        )}
+
+                        {isIncluded && watchSplitType === 'shares' && (
+                          <Controller
+                            name={`participants.${m.id}.value`}
+                            control={control}
+                            render={({ field }) => (
+                              <TextField
+                                size="small"
+                                type="number"
+                                label="Shares"
+                                required
+                                value={field.value ?? '1'}
+                                onChange={(e) => field.onChange(e.target.value)}
+                                sx={{ width: 160 }}
+                              />
+                            )}
+                          />
+                        )}
+
+                        {isIncluded && watchSplitType === 'days_wise' && (
+                          <TextField
+                            size="small"
+                            type="number"
+                            label="Days"
+                            required
+                            value={memberDaysData[m.id] || ''}
+                            onChange={(e) => setMemberDaysData({ ...memberDaysData, [m.id]: e.target.value })}
+                            sx={{ width: 160 }}
+                          />
+                        )}
+
+                        {isIncluded && watchSplitType === 'consumption_wise' && (
+                          <TextField
+                            size="small"
+                            type="number"
+                            label="Consumption Units"
+                            required
+                            value={memberConsumptionData[m.id] || ''}
+                            onChange={(e) => setMemberConsumptionData({ ...memberConsumptionData, [m.id]: e.target.value })}
+                            sx={{ width: 160 }}
+                          />
+                        )}
+
+                        {isIncluded && watchSplitType === 'hybrid' && (
+                          <Box display="flex" gap={1}>
+                            <FormControl size="small" sx={{ width: 110 }}>
+                              <Select
+                                value={hybridConfigData[m.id]?.method || 'equal'}
+                                onChange={(e) => setHybridConfigData({
+                                  ...hybridConfigData,
+                                  [m.id]: { ...hybridConfigData[m.id], method: e.target.value }
+                                })}
+                              >
+                                <MenuItem value="equal">Equal</MenuItem>
+                                <MenuItem value="fixed">Fixed</MenuItem>
+                                <MenuItem value="percentage">Percent</MenuItem>
+                              </Select>
+                            </FormControl>
+                            {hybridConfigData[m.id]?.method !== 'equal' && (
+                              <TextField
+                                size="small"
+                                type="number"
+                                label={hybridConfigData[m.id]?.method === 'fixed' ? `Value (${group?.currency})` : 'Value (%)'}
+                                required
+                                value={hybridConfigData[m.id]?.value || ''}
+                                onChange={(e) => setHybridConfigData({
+                                  ...hybridConfigData,
+                                  [m.id]: { ...hybridConfigData[m.id], value: e.target.value }
+                                })}
+                                sx={{ width: 100 }}
+                              />
+                            )}
+                          </Box>
                         )}
 
                         {isIncluded && (
@@ -509,15 +859,65 @@ export default function AddExpensePage() {
               )}
             </Grid>
 
-            <Box display="flex" gap={2} mt={4}>
+            {/* Live split preview container for items */}
+            {watchSplitType === 'item_wise' && (
+              <Box mt={2}>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Calculated Shares:</Typography>
+                <Card variant="outlined">
+                  <CardContent sx={{ p: 2, pb: '16px !important' }}>
+                    {members?.map(m => {
+                      const share = getSplitAmount(m.id);
+                      if (share <= 0) return null;
+                      return (
+                        <Box key={m.id} sx={{ display: 'flex', justifyContent: 'space-between', py: 0.5 }}>
+                          <Typography>{m.full_name}</Typography>
+                          <Typography fontWeight={600} color="primary.main">{formatCurrency(share, group?.currency)}</Typography>
+                        </Box>
+                      );
+                    })}
+                  </CardContent>
+                </Card>
+              </Box>
+            )}
+
+            <Box display="flex" gap={2} mt={4} sx={{ width: '100%' }}>
               <Button variant="outlined" onClick={() => navigate(`/groups/${groupId}/expenses`)}>Cancel</Button>
-              <Button type="submit" variant="contained" disabled={isSubmitting || !validation.isValid}>
+              <Button
+                variant="outlined"
+                color="secondary"
+                disabled={isSubmitting || !validation.isValid}
+                onClick={handleSubmit((data) => handleCreateSubmit(data, true))}
+              >
+                Save as Draft
+              </Button>
+              <Button
+                type="button"
+                variant="contained"
+                disabled={isSubmitting || !validation.isValid}
+                onClick={handleSubmit((data) => handleCreateSubmit(data, false))}
+              >
                 {isSubmitting ? 'Saving...' : 'Add Expense'}
               </Button>
             </Box>
           </Box>
         </CardContent>
       </Card>
+
+      {/* Duplicate Warning Dialog */}
+      <Dialog open={duplicateWarningOpen} onClose={() => setDuplicateWarningOpen(false)}>
+        <DialogTitle>Duplicate Expense Detected</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            An expense with the same title, amount, and date already exists in this group. Are you sure you want to add this expense anyway?
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDuplicateWarningOpen(false)}>Cancel</Button>
+          <Button onClick={forceSubmit} variant="contained" color="warning">
+            Save Anyway
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

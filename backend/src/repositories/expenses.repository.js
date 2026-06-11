@@ -55,14 +55,15 @@ const expensesRepository = {
     const q = client ? client.query.bind(client) : query;
     const { rows } = await q(
       `INSERT INTO expenses (group_id, paid_by_member_id, created_by, category_id, event_id, title, description,
-        amount, currency, expense_date, split_type, receipt_url, notes, idempotency_key, cost_center_id, project_name, approval_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+        amount, currency, expense_date, split_type, receipt_url, notes, idempotency_key, cost_center_id, project_name, approval_status, is_draft)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
       [
         data.groupId, data.paidByMemberId, data.createdBy, data.categoryId || null, data.eventId || null,
         data.title, data.description || null, data.amount, data.currency,
         data.expenseDate, data.splitType, data.receiptUrl || null,
         data.notes || null, data.idempotencyKey || null,
-        data.costCenterId || null, data.projectName || null, data.approvalStatus || 'approved'
+        data.costCenterId || null, data.projectName || null, data.approvalStatus || 'approved',
+        data.isDraft ?? false
       ]
     );
     return rows[0];
@@ -73,13 +74,14 @@ const expensesRepository = {
     const { rows } = await q(
       `UPDATE expenses SET title=$1, description=$2, amount=$3, expense_date=$4,
         category_id=$5, paid_by_member_id=$6, split_type=$7, notes=$8, receipt_url=$9,
-        event_id=$10, cost_center_id=$11, project_name=$12, approval_status=$13
-       WHERE id=$14 AND deleted_at IS NULL RETURNING *`,
+        event_id=$10, cost_center_id=$11, project_name=$12, approval_status=$13, is_draft=$14
+       WHERE id=$15 AND deleted_at IS NULL RETURNING *`,
       [
         data.title, data.description, data.amount, data.expenseDate,
         data.categoryId, data.paidByMemberId, data.splitType,
         data.notes, data.receiptUrl, data.eventId || null,
         data.costCenterId || null, data.projectName || null, data.approvalStatus || 'approved',
+        data.is_draft ?? false,
         id,
       ]
     );

@@ -11,6 +11,7 @@ import GroupDetailsPage from '../pages/groups/GroupDetailsPage';
 import ExpensesPage from '../pages/expenses/ExpensesPage';
 import AddExpensePage from '../pages/expenses/AddExpensePage';
 import EditExpensePage from '../pages/expenses/EditExpensePage';
+import ExpenseDetailPage from '../pages/expenses/ExpenseDetailPage';
 import SettlementPage from '../pages/settlement/SettlementPage';
 import ReportsPage from '../pages/reports/ReportsPage';
 import ActivityTimelinePage from '../pages/activity/ActivityTimelinePage';
@@ -45,6 +46,7 @@ export default function AppRouter() {
             <Route index element={<GroupDetailsPage />} />
             <Route path="expenses" element={<ExpensesPage />} />
             <Route path="expenses/new" element={<AddExpensePage />} />
+            <Route path="expenses/:expenseId" element={<ExpenseDetailPage />} />
             <Route path="expenses/:expenseId/edit" element={<EditExpensePage />} />
             <Route path="settlement" element={<SettlementPage />} />
             <Route path="reports" element={<ReportsPage />} />

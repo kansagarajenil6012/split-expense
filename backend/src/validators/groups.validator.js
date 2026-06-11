@@ -17,6 +17,7 @@ export const updateGroupSchema = z.object({
     groupType: z.string().optional(),
     currency: z.string().length(3).optional(),
     isArchived: z.boolean().optional(),
+    tags: z.array(z.string()).optional(),
   }),
 });
 
@@ -41,5 +42,19 @@ export const memberIdSchema = z.object({
   params: z.object({
     groupId: z.string().uuid(),
     memberId: z.string().uuid(),
+  }),
+});
+
+export const cloneGroupSchema = z.object({
+  params: z.object({ groupId: z.string().uuid() }),
+  body: z.object({
+    name: z.string().min(2).max(150),
+  }),
+});
+
+export const transferOwnershipSchema = z.object({
+  params: z.object({ groupId: z.string().uuid() }),
+  body: z.object({
+    toMemberId: z.string().uuid(),
   }),
 });

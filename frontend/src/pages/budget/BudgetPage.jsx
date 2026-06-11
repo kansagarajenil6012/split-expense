@@ -11,7 +11,7 @@ import EditRoundedIcon from '@mui/icons-material/EditRounded';
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded';
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { budgetsApi, expensesApi } from '../../services/api.js';
+import { budgetsApi, expensesApi, groupsApi } from '../../services/api.js';
 import { formatCurrency, formatDate } from '../../utils/formatters.js';
 import { getErrorMessage } from '../../services/api-client.js';
 import dayjs from 'dayjs';
@@ -49,7 +49,7 @@ export default function BudgetPage() {
   const [editingBudget, setEditingBudget] = useState(null);
   const [error, setError] = useState('');
   const [form, setForm] = useState({
-    name: '', amountLimit: '', categoryId: '', period: 'monthly',
+    name: '', amountLimit: '', categoryId: '', memberId: '', budgetType: 'group', period: 'monthly',
     periodStart: '', periodEnd: '', alertThresholdPct: 80,
   });
 
@@ -68,6 +68,15 @@ export default function BudgetPage() {
       return data.data;
     },
   });
+
+  const { data: members = [] } = useQuery({
+    queryKey: ['members', groupId],
+    queryFn: async () => {
+      const { data } = await groupsApi.getMembers(groupId);
+      return data.data;
+    },
+  });
+
   const budgets = budgetsData?.data || [];
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['budgets', groupId] });
@@ -93,7 +102,7 @@ export default function BudgetPage() {
     const dates = getPeriodDates('monthly');
     setEditingBudget(null);
     setForm({
-      name: '', amountLimit: '', categoryId: '', period: 'monthly',
+      name: '', amountLimit: '', categoryId: '', memberId: '', budgetType: 'group', period: 'monthly',
       periodStart: dates.start, periodEnd: dates.end, alertThresholdPct: 80,
     });
     setError('');
@@ -106,6 +115,8 @@ export default function BudgetPage() {
       name: b.name,
       amountLimit: b.amount_limit,
       categoryId: b.category_id || '',
+      memberId: b.member_id || '',
+      budgetType: b.budget_type || 'group',
       period: b.period,
       periodStart: dayjs(b.period_start).format('YYYY-MM-DD'),
       periodEnd: dayjs(b.period_end).format('YYYY-MM-DD'),
@@ -131,7 +142,9 @@ export default function BudgetPage() {
     const payload = {
       name: form.name,
       amountLimit: parseFloat(form.amountLimit),
-      categoryId: form.categoryId || null,
+      categoryId: form.budgetType === 'category' ? (form.categoryId || null) : null,
+      memberId: form.budgetType === 'member' ? (form.memberId || null) : null,
+      budgetType: form.budgetType,
       period: form.period,
       periodStart: form.periodStart,
       periodEnd: form.periodEnd,
@@ -192,7 +205,21 @@ export default function BudgetPage() {
                     <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={1}>
                       <Box>
                         <Typography variant="subtitle1" fontWeight={700}>{b.name}</Typography>
-                        {b.category_name && <Chip label={b.category_name} size="small" sx={{ mt: 0.5 }} />}
+                        <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }} flexWrap="wrap" gap={0.5}>
+                          <Chip
+                            label={b.budget_type?.toUpperCase() || 'GROUP'}
+                            size="small"
+                            variant="outlined"
+                            color={b.budget_type === 'category' ? 'secondary' : b.budget_type === 'member' ? 'info' : 'primary'}
+                            sx={{ height: 20, fontSize: 10 }}
+                          />
+                          {b.budget_type === 'category' && b.category_name && (
+                            <Chip label={b.category_name} size="small" sx={{ height: 20, fontSize: 10 }} />
+                          )}
+                          {b.budget_type === 'member' && b.member_name && (
+                            <Chip label={b.member_name} size="small" sx={{ height: 20, fontSize: 10 }} />
+                          )}
+                        </Stack>
                       </Box>
                       <Stack direction="row" spacing={0.5}>
                         <Tooltip title="Edit"><IconButton size="small" onClick={() => openEdit(b)}><EditRoundedIcon fontSize="small" /></IconButton></Tooltip>
@@ -245,10 +272,27 @@ export default function BudgetPage() {
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
             <TextField label="Budget Name" required value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Monthly Food Budget" />
             <TextField label="Amount Limit" type="number" required inputProps={{ min: 1, step: 0.01 }} value={form.amountLimit} onChange={(e) => setForm(f => ({ ...f, amountLimit: e.target.value }))} />
-            <TextField select label="Category (Optional)" value={form.categoryId} onChange={(e) => setForm(f => ({ ...f, categoryId: e.target.value }))}>
-              <MenuItem value="">All Categories</MenuItem>
-              {categories.map(c => <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>)}
+            
+            <TextField select label="Budget Type" value={form.budgetType} onChange={(e) => setForm(f => ({ ...f, budgetType: e.target.value }))}>
+              <MenuItem value="group">Group-wide</MenuItem>
+              <MenuItem value="category">Category-based</MenuItem>
+              <MenuItem value="member">Member-based</MenuItem>
             </TextField>
+
+            {form.budgetType === 'category' && (
+              <TextField select required label="Category" value={form.categoryId} onChange={(e) => setForm(f => ({ ...f, categoryId: e.target.value }))}>
+                <MenuItem value="">Select Category</MenuItem>
+                {categories.map(c => <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>)}
+              </TextField>
+            )}
+
+            {form.budgetType === 'member' && (
+              <TextField select required label="Member" value={form.memberId} onChange={(e) => setForm(f => ({ ...f, memberId: e.target.value }))}>
+                <MenuItem value="">Select Member</MenuItem>
+                {members.map(m => <MenuItem key={m.id} value={m.id}>{m.full_name}</MenuItem>)}
+              </TextField>
+            )}
+
             <TextField select label="Period" value={form.period} onChange={(e) => handlePeriodChange(e.target.value)}>
               {PERIODS.map(p => <MenuItem key={p.value} value={p.value}>{p.label}</MenuItem>)}
             </TextField>
@@ -261,7 +305,7 @@ export default function BudgetPage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={closeDialog}>Cancel</Button>
-          <Button variant="contained" onClick={handleSubmit} disabled={!form.name || !form.amountLimit || createMutation.isPending || updateMutation.isPending}>
+          <Button variant="contained" onClick={handleSubmit} disabled={!form.name || !form.amountLimit || (form.budgetType === 'category' && !form.categoryId) || (form.budgetType === 'member' && !form.memberId) || createMutation.isPending || updateMutation.isPending}>
             {editingBudget ? 'Update' : 'Create'}
           </Button>
         </DialogActions>

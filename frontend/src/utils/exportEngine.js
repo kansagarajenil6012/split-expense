@@ -28,6 +28,32 @@ export const exportToPDF = (headers, rows, filename, title = 'Report') => {
   doc.save(`${filename}.pdf`);
 };
 
+export const exportToCSV = (data, filename) => {
+  if (!data || !data.length) return;
+  const headers = Object.keys(data[0]);
+  const csvRows = [];
+  
+  csvRows.push(headers.map(h => `"${String(h).replace(/"/g, '""')}"`).join(','));
+  
+  for (const row of data) {
+    const values = headers.map(header => {
+      const val = row[header];
+      return `"${String(val === null || val === undefined ? '' : val).replace(/"/g, '""')}"`;
+    });
+    csvRows.push(values.join(','));
+  }
+  
+  const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', `${filename}.csv`);
+  link.style.visibility = 'hidden';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
+
 // Data Formatter Helpers
 export const generateExpensesExportData = (expenses) => {
   return expenses.map(e => ({

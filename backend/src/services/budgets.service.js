@@ -37,6 +37,8 @@ const budgetsService = {
       periodEnd: data.periodEnd,
       alertThresholdPct: data.alertThresholdPct,
       createdBy: userId,
+      budgetType: data.budgetType,
+      memberId: data.memberId,
     });
 
     await logActivity({
@@ -64,6 +66,8 @@ const budgetsService = {
       periodStart: data.periodStart ?? budget.period_start,
       periodEnd: data.periodEnd ?? budget.period_end,
       alertThresholdPct: data.alertThresholdPct ?? budget.alert_threshold_pct,
+      budgetType: data.budgetType ?? budget.budget_type,
+      memberId: data.memberId !== undefined ? data.memberId : budget.member_id,
     });
 
     await logActivity({

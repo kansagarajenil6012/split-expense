@@ -1,12 +1,16 @@
 import { getClient } from '../config/database.js';
 import crypto from 'crypto';
+import QRCode from 'qrcode';
 import groupsRepository from '../repositories/groups.repository.js';
 import groupMembersRepository from '../repositories/group-members.repository.js';
 import invitationsRepository from '../repositories/invitations.repository.js';
 import usersRepository from '../repositories/users.repository.js';
 import notificationsRepository from '../repositories/notifications.repository.js';
+import categoriesRepository from '../repositories/categories.repository.js';
 import { notFound, badRequest, forbidden, conflict } from '../utils/app-error.js';
 import { logActivity, logAudit, getRequestMeta } from './audit.service.js';
+import { uploadFile, validateImageFile } from './upload.service.js';
+import config from '../config/index.js';
 
 const groupsService = {
   async createGroup(userId, data, req) {
@@ -102,6 +106,239 @@ const groupsService = {
     return { id: groupId };
   },
 
+  // ============================================================
+  // ARCHIVE / UNARCHIVE
+  // ============================================================
+
+  async archiveGroup(groupId, userId, req) {
+    const group = await groupsRepository.findById(groupId);
+    if (!group) throw notFound('Group');
+    if (group.is_archived) throw badRequest('Group is already archived');
+
+    await groupsRepository.update(groupId, { is_archived: true });
+
+    await logActivity({
+      groupId,
+      actorUserId: userId,
+      entityType: 'group',
+      entityId: groupId,
+      action: 'archive',
+      summary: `Archived group "${group.name}"`,
+      ...getRequestMeta(req),
+    });
+
+    return { id: groupId, is_archived: true };
+  },
+
+  async unarchiveGroup(groupId, userId, req) {
+    const group = await groupsRepository.findById(groupId);
+    if (!group) throw notFound('Group');
+    if (!group.is_archived) throw badRequest('Group is not archived');
+
+    await groupsRepository.update(groupId, { is_archived: false });
+
+    await logActivity({
+      groupId,
+      actorUserId: userId,
+      entityType: 'group',
+      entityId: groupId,
+      action: 'archive',
+      summary: `Unarchived group "${group.name}"`,
+      ...getRequestMeta(req),
+    });
+
+    return { id: groupId, is_archived: false };
+  },
+
+  // ============================================================
+  // CLONE GROUP
+  // ============================================================
+
+  async cloneGroup(groupId, userId, data, req) {
+    const original = await groupsRepository.findById(groupId);
+    if (!original) throw notFound('Group');
+
+    const members = await groupMembersRepository.findByGroupId(groupId);
+
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+
+      // Create new group with same settings
+      const newGroup = await groupsRepository.create({
+        name: data.name || `${original.name} (Copy)`,
+        description: original.description,
+        groupType: original.group_type,
+        currency: original.currency,
+        settings: original.settings,
+        tags: original.tags,
+        createdBy: userId,
+      }, client);
+
+      // Add creator as admin
+      await groupMembersRepository.create(
+        { groupId: newGroup.id, userId, role: 'admin' },
+        client
+      );
+
+      // Add other active members
+      for (const member of members) {
+        if (member.user_id !== userId && member.status === 'active') {
+          await groupMembersRepository.create(
+            { groupId: newGroup.id, userId: member.user_id, role: 'member', invitedBy: userId },
+            client
+          );
+        }
+      }
+
+      // Clone categories (non-system)
+      const categories = await categoriesRepository.findByGroupId(groupId);
+      for (const cat of categories) {
+        if (!cat.is_system) {
+          await categoriesRepository.create({
+            groupId: newGroup.id,
+            name: cat.name,
+            icon: cat.icon,
+            color: cat.color,
+          }, client);
+        }
+      }
+
+      await logActivity({
+        groupId: newGroup.id,
+        actorUserId: userId,
+        entityType: 'group',
+        entityId: newGroup.id,
+        action: 'clone',
+        summary: `Cloned group from "${original.name}"`,
+        payload: { sourceGroupId: groupId },
+        ...getRequestMeta(req),
+      }, client);
+
+      await client.query('COMMIT');
+      return newGroup;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  // ============================================================
+  // TRANSFER OWNERSHIP
+  // ============================================================
+
+  async transferOwnership(groupId, userId, toMemberId, req) {
+    const group = await groupsRepository.findById(groupId);
+    if (!group) throw notFound('Group');
+
+    const currentMembership = await groupMembersRepository.findActiveMembership(groupId, userId);
+    if (!currentMembership || currentMembership.role !== 'admin') {
+      throw forbidden('Only admins can transfer ownership');
+    }
+
+    const targetMember = await groupMembersRepository.findById(toMemberId);
+    if (!targetMember || targetMember.group_id !== groupId || targetMember.status !== 'active') {
+      throw badRequest('Invalid target member');
+    }
+
+    if (targetMember.user_id === userId) {
+      throw badRequest('Cannot transfer ownership to yourself');
+    }
+
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+
+      // Promote target to admin
+      await groupMembersRepository.updateRole(toMemberId, 'admin', client);
+      // Demote current owner to member
+      await groupMembersRepository.updateRole(currentMembership.id, 'member', client);
+
+      // Notify new owner
+      await notificationsRepository.create({
+        userId: targetMember.user_id,
+        groupId,
+        type: 'ownership_transferred',
+        title: 'Ownership Transferred',
+        body: `You are now the admin of "${group.name}"`,
+        entityType: 'group',
+        entityId: groupId,
+      }, client);
+
+      await logActivity({
+        groupId,
+        actorUserId: userId,
+        entityType: 'group',
+        entityId: groupId,
+        action: 'transfer',
+        summary: `Transferred ownership to ${targetMember.full_name || 'member'}`,
+        payload: { fromUserId: userId, toMemberId },
+        ...getRequestMeta(req),
+      }, client);
+
+      await client.query('COMMIT');
+      return { message: 'Ownership transferred successfully' };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  // ============================================================
+  // COVER IMAGE
+  // ============================================================
+
+  async uploadCoverImage(groupId, userId, file, req) {
+    const group = await groupsRepository.findById(groupId);
+    if (!group) throw notFound('Group');
+
+    validateImageFile(file);
+
+    const filePath = `groups/${groupId}/cover_${Date.now()}.${file.originalname.split('.').pop()}`;
+    const url = await uploadFile(config.supabase.bucket, filePath, file.buffer, file.mimetype);
+
+    await groupsRepository.update(groupId, { cover_image_url: url });
+
+    await logActivity({
+      groupId,
+      actorUserId: userId,
+      entityType: 'group',
+      entityId: groupId,
+      action: 'update',
+      summary: 'Updated group cover image',
+      ...getRequestMeta(req),
+    });
+
+    return { coverImageUrl: url };
+  },
+
+  // ============================================================
+  // QR INVITE
+  // ============================================================
+
+  async generateQRInvite(groupId, userId, req) {
+    // Generate share link first
+    const { token } = await this.generateShareLink(groupId, userId, req);
+    const joinUrl = `${config.frontendUrl}/join/${token}`;
+
+    // Generate QR code as data URL
+    const qrDataUrl = await QRCode.toDataURL(joinUrl, {
+      width: 400,
+      margin: 2,
+      color: { dark: '#000000', light: '#ffffff' },
+    });
+
+    return { token, joinUrl, qrDataUrl };
+  },
+
+  // ============================================================
+  // MEMBERS
+  // ============================================================
+
   async getMembers(groupId) {
     return groupMembersRepository.findByGroupId(groupId);
   },
@@ -122,7 +359,7 @@ const groupsService = {
         actorUserId: userId,
         entityType: 'group_member',
         entityId: memberId,
-        action: 'role_update',
+        action: 'update',
         summary: `Changed ${member.full_name}'s role from ${member.role} to ${data.role}`,
         payload: { oldRole: member.role, newRole: data.role },
         ...getRequestMeta(req),
@@ -191,13 +428,14 @@ const groupsService = {
     return { id: membership.id };
   },
 
+  // ============================================================
+  // INVITATIONS
+  // ============================================================
+
   async inviteMember(groupId, userId, { email }, req) {
     const contact = email.trim();
     
-    // Check if it's a valid email format
     const isEmail = contact.includes('@');
-    
-    // Check if it's a valid phone format (at least 7 digits, containing only valid phone characters)
     const digitsCount = (contact.match(/\d/g) || []).length;
     const isPhone = digitsCount >= 7 && /^\+?[0-9\s\-()]+$/.test(contact);
 
@@ -213,7 +451,6 @@ const groupsService = {
         const existing = await groupMembersRepository.findActiveMembership(groupId, existingUser.id);
         if (existing) throw conflict('User is already a member');
         
-        // Auto-add existing user directly to the group
         const client = await getClient();
         try {
           await client.query('BEGIN');
@@ -252,7 +489,6 @@ const groupsService = {
           client.release();
         }
       } else {
-        // User doesn't exist, create a shadow user and add them to the group immediately!
         const dbEmail = isEmail ? contact : `${contact}@phone.splitexpense.local`;
         const dbPhone = isEmail ? null : contact;
         const defaultName = isEmail ? contact.split('@')[0] : contact;
@@ -261,7 +497,6 @@ const groupsService = {
         try {
           await client.query('BEGIN');
 
-          // 1. Create shadow user
           const { rows: userRows } = await client.query(
             `INSERT INTO users (email, password_hash, full_name, phone, is_active)
              VALUES ($1, NULL, $2, $3, false)
@@ -270,13 +505,11 @@ const groupsService = {
           );
           const shadowUser = userRows[0];
 
-          // 2. Add to group_members immediately
           const membership = await groupMembersRepository.create(
             { groupId, userId: shadowUser.id, invitedBy: userId, role: 'member' },
             client
           );
 
-          // 3. Create invitation record
           const invitation = await invitationsRepository.create({
             groupId,
             invitedBy: userId,
@@ -304,12 +537,10 @@ const groupsService = {
         }
       }
     } else {
-      // It's a guest member added purely by Name (no email, no phone)!
       const client = await getClient();
       try {
         await client.query('BEGIN');
 
-        // 1. Create a guest user (unique dummy email)
         const guestEmail = `guest-${crypto.randomUUID()}@splitexpense.local`;
         const { rows: userRows } = await client.query(
           `INSERT INTO users (email, password_hash, full_name, phone, is_active)
@@ -319,7 +550,6 @@ const groupsService = {
         );
         const guestUser = userRows[0];
 
-        // 2. Add to group members immediately
         const membership = await groupMembersRepository.create(
           { groupId, userId: guestUser.id, invitedBy: userId, role: 'member' },
           client
@@ -353,7 +583,7 @@ const groupsService = {
       invitedBy: userId,
       inviteeEmail: dummyEmail,
       inviteeUserId: null,
-      expiresInDays: 30, // Link valid for 30 days
+      expiresInDays: 30,
     });
 
     await logActivity({
@@ -405,7 +635,7 @@ const groupsService = {
       await notificationsRepository.create({
         userId: invitation.invited_by,
         groupId: invitation.group_id,
-        type: 'invitation_accepted',
+        type: 'member_joined',
         title: 'Invitation Accepted',
         body: `${user.full_name} joined "${group.name}"`,
         entityType: 'group_member',

@@ -56,13 +56,15 @@ export default function EventsPage() {
     },
   });
 
-  const { data: expenses } = useQuery({
+  const { data: expensesData } = useQuery({
     queryKey: ['expenses', groupId],
     queryFn: async () => {
       const { data } = await expensesApi.list(groupId, { limit: 100, offset: 0 });
-      return data.data.expenses;
+      return data;
     },
   });
+
+  const expenses = expensesData?.data || [];
 
   const { data: attendanceData, isLoading: isAttendanceLoading } = useQuery({
     queryKey: ['attendance', groupId, selectedEventId],

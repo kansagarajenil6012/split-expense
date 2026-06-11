@@ -1,8 +1,9 @@
-export const formatCurrency = (amount, currency = 'INR') => {
+export const formatCurrency = (amount, currency) => {
   const num = parseFloat(amount) || 0;
+  const safeCurrency = currency || 'INR';
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
-    currency,
+    currency: safeCurrency,
     minimumFractionDigits: 2,
   }).format(num);
 };

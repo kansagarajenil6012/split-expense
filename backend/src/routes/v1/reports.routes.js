@@ -10,4 +10,10 @@ router.get('/members', authenticate, authorizeGroup(), expensesController.getMem
 router.get('/monthly', authenticate, authorizeGroup(), expensesController.getMonthlyReport);
 router.get('/categories', authenticate, authorizeGroup(), expensesController.getCategoryReport);
 
+// Advanced Reports
+router.get('/yearly', authenticate, authorizeGroup(), expensesController.getYearlyReport);
+router.get('/trends', authenticate, authorizeGroup(), expensesController.getSpendingTrends);
+router.get('/budget-report', authenticate, authorizeGroup(), expensesController.getBudgetReport);
+router.get('/savings', authenticate, authorizeGroup(), expensesController.getSavingsAnalysis);
+
 export default router;

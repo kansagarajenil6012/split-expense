@@ -4,12 +4,23 @@ const budgetsRepository = {
   async findByGroupId(groupId, { limit = 20, offset = 0 } = {}) {
     const { rows } = await query(
       `SELECT b.*, u.full_name as created_by_name, ec.name as category_name,
+              gm.user_id as member_user_id, mu.full_name as member_name,
               COALESCE((
-                SELECT SUM(e.amount)
+                SELECT SUM(
+                  CASE
+                    WHEN b.budget_type = 'member' THEN (
+                      SELECT COALESCE(SUM(ep.share_amount), 0)
+                      FROM expense_participants ep
+                      WHERE ep.expense_id = e.id AND ep.member_id = b.member_id AND ep.deleted_at IS NULL
+                    )
+                    ELSE e.amount
+                  END
+                )
                 FROM expenses e
                 WHERE e.group_id = b.group_id
                   AND e.deleted_at IS NULL
                   AND e.status = 'active'
+                  AND e.is_draft = false
                   AND (b.category_id IS NULL OR e.category_id = b.category_id)
                   AND e.expense_date >= b.period_start
                   AND e.expense_date <= b.period_end
@@ -17,6 +28,8 @@ const budgetsRepository = {
        FROM budgets b
        JOIN users u ON u.id = b.created_by
        LEFT JOIN expense_categories ec ON ec.id = b.category_id
+       LEFT JOIN group_members gm ON gm.id = b.member_id
+       LEFT JOIN users mu ON mu.id = gm.user_id
        WHERE b.group_id = $1 AND b.deleted_at IS NULL
        ORDER BY b.created_at DESC
        LIMIT $2 OFFSET $3`,
@@ -34,12 +47,23 @@ const budgetsRepository = {
   async findById(id) {
     const { rows } = await query(
       `SELECT b.*, u.full_name as created_by_name, ec.name as category_name,
+              gm.user_id as member_user_id, mu.full_name as member_name,
               COALESCE((
-                SELECT SUM(e.amount)
+                SELECT SUM(
+                  CASE
+                    WHEN b.budget_type = 'member' THEN (
+                      SELECT COALESCE(SUM(ep.share_amount), 0)
+                      FROM expense_participants ep
+                      WHERE ep.expense_id = e.id AND ep.member_id = b.member_id AND ep.deleted_at IS NULL
+                    )
+                    ELSE e.amount
+                  END
+                )
                 FROM expenses e
                 WHERE e.group_id = b.group_id
                   AND e.deleted_at IS NULL
                   AND e.status = 'active'
+                  AND e.is_draft = false
                   AND (b.category_id IS NULL OR e.category_id = b.category_id)
                   AND e.expense_date >= b.period_start
                   AND e.expense_date <= b.period_end
@@ -47,6 +71,8 @@ const budgetsRepository = {
        FROM budgets b
        JOIN users u ON u.id = b.created_by
        LEFT JOIN expense_categories ec ON ec.id = b.category_id
+       LEFT JOIN group_members gm ON gm.id = b.member_id
+       LEFT JOIN users mu ON mu.id = gm.user_id
        WHERE b.id = $1 AND b.deleted_at IS NULL`,
       [id]
     );
@@ -57,18 +83,31 @@ const budgetsRepository = {
     const today = new Date().toISOString().split('T')[0];
     const { rows } = await query(
       `SELECT b.*, ec.name as category_name,
+              gm.user_id as member_user_id, mu.full_name as member_name,
               COALESCE((
-                SELECT SUM(e.amount)
+                SELECT SUM(
+                  CASE
+                    WHEN b.budget_type = 'member' THEN (
+                      SELECT COALESCE(SUM(ep.share_amount), 0)
+                      FROM expense_participants ep
+                      WHERE ep.expense_id = e.id AND ep.member_id = b.member_id AND ep.deleted_at IS NULL
+                    )
+                    ELSE e.amount
+                  END
+                )
                 FROM expenses e
                 WHERE e.group_id = b.group_id
                   AND e.deleted_at IS NULL
                   AND e.status = 'active'
+                  AND e.is_draft = false
                   AND (b.category_id IS NULL OR e.category_id = b.category_id)
                   AND e.expense_date >= b.period_start
                   AND e.expense_date <= b.period_end
               ), 0) as spent_amount
        FROM budgets b
        LEFT JOIN expense_categories ec ON ec.id = b.category_id
+       LEFT JOIN group_members gm ON gm.id = b.member_id
+       LEFT JOIN users mu ON mu.id = gm.user_id
        WHERE b.group_id = $1 AND b.deleted_at IS NULL
          AND b.period_start <= $2 AND b.period_end >= $2
        ORDER BY b.created_at DESC`,
@@ -80,12 +119,12 @@ const budgetsRepository = {
   async create(data, client = null) {
     const q = client ? client.query.bind(client) : query;
     const { rows } = await q(
-      `INSERT INTO budgets (group_id, category_id, name, amount_limit, currency, period, period_start, period_end, alert_threshold_pct, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      `INSERT INTO budgets (group_id, category_id, name, amount_limit, currency, period, period_start, period_end, alert_threshold_pct, created_by, budget_type, member_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
       [
         data.groupId, data.categoryId || null, data.name, data.amountLimit,
         data.currency, data.period, data.periodStart, data.periodEnd,
-        data.alertThresholdPct || 80, data.createdBy,
+        data.alertThresholdPct || 80, data.createdBy, data.budgetType || 'group', data.memberId || null
       ]
     );
     return rows[0];
@@ -93,9 +132,13 @@ const budgetsRepository = {
 
   async update(id, data) {
     const { rows } = await query(
-      `UPDATE budgets SET name=$1, amount_limit=$2, category_id=$3, period=$4, period_start=$5, period_end=$6, alert_threshold_pct=$7, updated_at=NOW()
-       WHERE id=$8 AND deleted_at IS NULL RETURNING *`,
-      [data.name, data.amountLimit, data.categoryId || null, data.period, data.periodStart, data.periodEnd, data.alertThresholdPct || 80, id]
+      `UPDATE budgets SET name=$1, amount_limit=$2, category_id=$3, period=$4, period_start=$5, period_end=$6, alert_threshold_pct=$7, budget_type=$8, member_id=$9, updated_at=NOW()
+       WHERE id=$10 AND deleted_at IS NULL RETURNING *`,
+      [
+        data.name, data.amountLimit, data.categoryId || null, data.period,
+        data.periodStart, data.periodEnd, data.alertThresholdPct || 80,
+        data.budgetType || 'group', data.memberId || null, id
+      ]
     );
     return rows[0];
   },
@@ -111,12 +154,23 @@ const budgetsRepository = {
   async findDeletedById(id) {
     const { rows } = await query(
       `SELECT b.*, u.full_name as created_by_name, ec.name as category_name,
+              gm.user_id as member_user_id, mu.full_name as member_name,
               COALESCE((
-                SELECT SUM(e.amount)
+                SELECT SUM(
+                  CASE
+                    WHEN b.budget_type = 'member' THEN (
+                      SELECT COALESCE(SUM(ep.share_amount), 0)
+                      FROM expense_participants ep
+                      WHERE e.id = ep.expense_id AND ep.member_id = b.member_id AND ep.deleted_at IS NULL
+                    )
+                    ELSE e.amount
+                  END
+                )
                 FROM expenses e
                 WHERE e.group_id = b.group_id
                   AND e.deleted_at IS NULL
                   AND e.status = 'active'
+                  AND e.is_draft = false
                   AND (b.category_id IS NULL OR e.category_id = b.category_id)
                   AND e.expense_date >= b.period_start
                   AND e.expense_date <= b.period_end
@@ -124,6 +178,8 @@ const budgetsRepository = {
        FROM budgets b
        JOIN users u ON u.id = b.created_by
        LEFT JOIN expense_categories ec ON ec.id = b.category_id
+       LEFT JOIN group_members gm ON gm.id = b.member_id
+       LEFT JOIN users mu ON mu.id = gm.user_id
        WHERE b.id = $1 AND b.deleted_at IS NOT NULL`,
       [id]
     );

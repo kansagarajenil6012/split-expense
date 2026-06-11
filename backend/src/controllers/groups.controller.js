@@ -94,3 +94,45 @@ export const acceptInvitation = async (req, res, next) => {
     success(res, result);
   } catch (err) { next(err); }
 };
+
+export const archiveGroup = async (req, res, next) => {
+  try {
+    const result = await groupsService.archiveGroup(req.groupId, req.user.id, req);
+    success(res, result);
+  } catch (err) { next(err); }
+};
+
+export const unarchiveGroup = async (req, res, next) => {
+  try {
+    const result = await groupsService.unarchiveGroup(req.groupId, req.user.id, req);
+    success(res, result);
+  } catch (err) { next(err); }
+};
+
+export const cloneGroup = async (req, res, next) => {
+  try {
+    const result = await groupsService.cloneGroup(req.groupId, req.user.id, req.body, req);
+    created(res, result);
+  } catch (err) { next(err); }
+};
+
+export const transferOwnership = async (req, res, next) => {
+  try {
+    const result = await groupsService.transferOwnership(req.groupId, req.user.id, req.body.toMemberId, req);
+    success(res, result);
+  } catch (err) { next(err); }
+};
+
+export const getQRInvite = async (req, res, next) => {
+  try {
+    const result = await groupsService.generateQRInvite(req.groupId, req.user.id, req);
+    success(res, result);
+  } catch (err) { next(err); }
+};
+
+export const uploadCoverImage = async (req, res, next) => {
+  try {
+    const result = await groupsService.uploadCoverImage(req.groupId, req.user.id, req.file, req);
+    success(res, result);
+  } catch (err) { next(err); }
+};

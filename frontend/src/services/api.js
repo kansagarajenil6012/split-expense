@@ -22,6 +22,20 @@ export const groupsApi = {
   generateShareLink: (groupId) => apiClient.post(`/groups/${groupId}/share-link`),
   leave: (groupId) => apiClient.post(`/groups/${groupId}/leave`),
   acceptInvite: (token) => apiClient.post(`/invitations/${token}/accept`),
+  
+  // Advanced features
+  archive: (groupId) => apiClient.patch(`/groups/${groupId}/archive`),
+  unarchive: (groupId) => apiClient.patch(`/groups/${groupId}/unarchive`),
+  clone: (groupId, data) => apiClient.post(`/groups/${groupId}/clone`, data),
+  transferOwnership: (groupId, data) => apiClient.post(`/groups/${groupId}/transfer-ownership`, data),
+  getQRInvite: (groupId) => apiClient.get(`/groups/${groupId}/qr-invite`),
+  uploadCoverImage: (groupId, file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiClient.post(`/groups/${groupId}/cover-image`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
 };
 
 export const expensesApi = {
@@ -32,6 +46,32 @@ export const expensesApi = {
   delete: (groupId, expenseId) => apiClient.delete(`/groups/${groupId}/expenses/${expenseId}`),
   restore: (groupId, expenseId) => apiClient.post(`/groups/${groupId}/expenses/${expenseId}/restore`),
   getCategories: (groupId) => apiClient.get(`/groups/${groupId}/categories`),
+
+  // Advanced features
+  previewSplit: (groupId, data) => apiClient.post(`/groups/${groupId}/expenses/preview`, data),
+  publish: (groupId, expenseId) => apiClient.patch(`/groups/${groupId}/expenses/${expenseId}/publish`),
+  getHistory: (groupId, expenseId) => apiClient.get(`/groups/${groupId}/expenses/${expenseId}/history`),
+  
+  // Attachments
+  getAttachments: (groupId, expenseId) => apiClient.get(`/groups/${groupId}/expenses/${expenseId}/attachments`),
+  uploadAttachment: (groupId, expenseId, file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiClient.post(`/groups/${groupId}/expenses/${expenseId}/attachments`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  deleteAttachment: (groupId, expenseId, attachmentId) => apiClient.delete(`/groups/${groupId}/expenses/${expenseId}/attachments/${attachmentId}`),
+  
+  // Comments
+  getComments: (groupId, expenseId) => apiClient.get(`/groups/${groupId}/expenses/${expenseId}/comments`),
+  addComment: (groupId, expenseId, data) => apiClient.post(`/groups/${groupId}/expenses/${expenseId}/comments`, data),
+  updateComment: (groupId, commentId, data) => apiClient.patch(`/groups/${groupId}/expenses/comments/${commentId}`, data),
+  deleteComment: (groupId, commentId) => apiClient.delete(`/groups/${groupId}/expenses/comments/${commentId}`),
+  
+  // Reactions
+  toggleReaction: (groupId, expenseId, data) => apiClient.post(`/groups/${groupId}/expenses/${expenseId}/reactions`, data),
+  getReactions: (groupId, expenseId) => apiClient.get(`/groups/${groupId}/expenses/${expenseId}/reactions`),
 };
 
 export const settlementsApi = {
@@ -41,6 +81,13 @@ export const settlementsApi = {
   create: (groupId, data) => apiClient.post(`/groups/${groupId}/settlements`, data),
   cancel: (groupId, settlementId) => apiClient.patch(`/groups/${groupId}/settlements/${settlementId}/cancel`),
   restore: (groupId, settlementId) => apiClient.post(`/groups/${groupId}/settlements/${settlementId}/restore`),
+
+  // Advanced features
+  request: (groupId, data) => apiClient.post(`/groups/${groupId}/settlements/request`, data),
+  approve: (groupId, settlementId) => apiClient.patch(`/groups/${groupId}/settlements/${settlementId}/approve`),
+  reject: (groupId, settlementId) => apiClient.patch(`/groups/${groupId}/settlements/${settlementId}/reject`),
+  reverse: (groupId, settlementId, data) => apiClient.patch(`/groups/${groupId}/settlements/${settlementId}/reverse`, data),
+  remind: (groupId, data) => apiClient.post(`/groups/${groupId}/settlements/remind`, data),
 };
 
 export const reportsApi = {
@@ -48,6 +95,12 @@ export const reportsApi = {
   members: (groupId) => apiClient.get(`/groups/${groupId}/reports/members`),
   monthly: (groupId, year) => apiClient.get(`/groups/${groupId}/reports/monthly`, { params: { year } }),
   categories: (groupId) => apiClient.get(`/groups/${groupId}/reports/categories`),
+
+  // Advanced features
+  yearly: (groupId) => apiClient.get(`/groups/${groupId}/reports/yearly`),
+  trends: (groupId, params) => apiClient.get(`/groups/${groupId}/reports/trends`, { params }),
+  budgetReport: (groupId) => apiClient.get(`/groups/${groupId}/reports/budget-report`),
+  savings: (groupId) => apiClient.get(`/groups/${groupId}/reports/savings`),
 };
 
 export const activityApi = {

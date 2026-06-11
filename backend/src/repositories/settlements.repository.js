@@ -43,13 +43,16 @@ const settlementsRepository = {
     const q = client ? client.query.bind(client) : query;
     const { rows } = await q(
       `INSERT INTO settlements (group_id, from_member_id, to_member_id, amount, currency,
-        status, method, notes, recorded_by, is_suggested, settled_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        status, method, notes, recorded_by, is_suggested, settled_at,
+        is_partial, parent_settlement_id, requested_by, approved_by, approved_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
       [
         data.groupId, data.fromMemberId, data.toMemberId, data.amount, data.currency,
         data.status || 'completed', data.method || null, data.notes || null,
         data.recordedBy, data.isSuggested || false,
         data.status === 'completed' ? new Date() : null,
+        data.isPartial || false, data.parentSettlementId || null,
+        data.requestedBy || null, data.approvedBy || null, data.approvedAt || null
       ]
     );
     return rows[0];
@@ -61,6 +64,37 @@ const settlementsRepository = {
     const { rows } = await q(
       `UPDATE settlements SET status = $1, settled_at = COALESCE($2, settled_at) WHERE id = $3 RETURNING *`,
       [status, settledAt, id]
+    );
+    return rows[0];
+  },
+
+  async approve(id, approvedBy, client = null) {
+    const q = client ? client.query.bind(client) : query;
+    const { rows } = await q(
+      `UPDATE settlements
+       SET status = 'completed', approved_by = $1, approved_at = NOW(), settled_at = NOW()
+       WHERE id = $2 AND status = 'requested' AND deleted_at IS NULL RETURNING *`,
+      [approvedBy, id]
+    );
+    return rows[0];
+  },
+
+  async reject(id, client = null) {
+    const q = client ? client.query.bind(client) : query;
+    const { rows } = await q(
+      `UPDATE settlements SET status = 'rejected' WHERE id = $1 AND status = 'requested' AND deleted_at IS NULL RETURNING *`,
+      [id]
+    );
+    return rows[0];
+  },
+
+  async reverse(id, { reversedBy, reversalReason }, client = null) {
+    const q = client ? client.query.bind(client) : query;
+    const { rows } = await q(
+      `UPDATE settlements
+       SET status = 'reversed', reversed_by = $1, reversal_reason = $2, reversed_at = NOW()
+       WHERE id = $3 AND status = 'completed' AND deleted_at IS NULL RETURNING *`,
+      [reversedBy, reversalReason, id]
     );
     return rows[0];
   },
@@ -84,7 +118,7 @@ const settlementsRepository = {
        JOIN users fu ON fu.id = fm.user_id
        JOIN group_members tm ON tm.id = s.to_member_id
        JOIN users tu ON tu.id = tm.user_id
-       JOIN users ru ON ru.id = s.recorded_by
+       LEFT JOIN users ru ON ru.id = s.recorded_by
        WHERE s.id = $1 AND (s.deleted_at IS NOT NULL OR s.status = 'cancelled')`,
       [id]
     );

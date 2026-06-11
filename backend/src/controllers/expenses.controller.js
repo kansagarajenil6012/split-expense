@@ -206,3 +206,108 @@ export const restoreSettlement = async (req, res, next) => {
     success(res, settlement);
   } catch (err) { next(err); }
 };
+
+export const previewSplit = async (req, res, next) => {
+  try {
+    const shares = await expensesService.previewSplit(req.validated.body);
+    success(res, shares);
+  } catch (err) { next(err); }
+};
+
+export const publishDraft = async (req, res, next) => {
+  try {
+    const expense = await expensesService.publishDraft(req.groupId, req.params.expenseId, req.user.id, req);
+    success(res, expense);
+  } catch (err) { next(err); }
+};
+
+export const getExpenseHistory = async (req, res, next) => {
+  try {
+    const history = await expensesService.getExpenseHistory(req.groupId, req.params.expenseId);
+    success(res, history);
+  } catch (err) { next(err); }
+};
+
+export const uploadAttachment = async (req, res, next) => {
+  try {
+    const attachment = await expensesService.addAttachment(req.groupId, req.params.expenseId, req.user.id, req.file, req);
+    created(res, attachment);
+  } catch (err) { next(err); }
+};
+
+export const deleteAttachment = async (req, res, next) => {
+  try {
+    await expensesService.deleteAttachment(req.groupId, req.params.expenseId, req.params.id, req.user.id, req);
+    noContent(res);
+  } catch (err) { next(err); }
+};
+
+export const getAttachments = async (req, res, next) => {
+  try {
+    const attachments = await expensesService.getAttachments(req.groupId, req.params.expenseId);
+    success(res, attachments);
+  } catch (err) { next(err); }
+};
+
+export const requestSettlement = async (req, res, next) => {
+  try {
+    const settlement = await settlementsService.requestSettlement(req.groupId, req.user.id, req.validated.body, req);
+    created(res, settlement);
+  } catch (err) { next(err); }
+};
+
+export const approveSettlement = async (req, res, next) => {
+  try {
+    const settlement = await settlementsService.approveSettlement(req.groupId, req.params.settlementId, req.user.id, req);
+    success(res, settlement);
+  } catch (err) { next(err); }
+};
+
+export const rejectSettlement = async (req, res, next) => {
+  try {
+    const settlement = await settlementsService.rejectSettlement(req.groupId, req.params.settlementId, req.user.id, req);
+    success(res, settlement);
+  } catch (err) { next(err); }
+};
+
+export const reverseSettlement = async (req, res, next) => {
+  try {
+    const settlement = await settlementsService.reverseSettlement(req.groupId, req.params.settlementId, req.user.id, req.body.reason, req);
+    success(res, settlement);
+  } catch (err) { next(err); }
+};
+
+export const sendReminder = async (req, res, next) => {
+  try {
+    const reminder = await settlementsService.sendReminder(req.groupId, req.user.id, req.validated.body, req);
+    created(res, reminder);
+  } catch (err) { next(err); }
+};
+
+export const getYearlyReport = async (req, res, next) => {
+  try {
+    const report = await reportsService.getYearlyReport(req.groupId);
+    success(res, report);
+  } catch (err) { next(err); }
+};
+
+export const getSpendingTrends = async (req, res, next) => {
+  try {
+    const report = await reportsService.getSpendingTrends(req.groupId, req.query.months ? parseInt(req.query.months) : 6);
+    success(res, report);
+  } catch (err) { next(err); }
+};
+
+export const getBudgetReport = async (req, res, next) => {
+  try {
+    const report = await reportsService.getBudgetReport(req.groupId);
+    success(res, report);
+  } catch (err) { next(err); }
+};
+
+export const getSavingsAnalysis = async (req, res, next) => {
+  try {
+    const report = await reportsService.getSavingsAnalysis(req.groupId);
+    success(res, report);
+  } catch (err) { next(err); }
+};
