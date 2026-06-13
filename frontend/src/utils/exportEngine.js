@@ -1,6 +1,6 @@
 import * as xlsx from 'xlsx';
-import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { formatDate } from './formatters.js';
 
 export const exportToExcel = (data, filename, sheetName = 'Sheet 1') => {
@@ -16,7 +16,7 @@ export const exportToPDF = (headers, rows, filename, title = 'Report') => {
   doc.setFontSize(18);
   doc.text(title, 14, 22);
   
-  doc.autoTable({
+  autoTable(doc, {
     startY: 30,
     head: [headers],
     body: rows,

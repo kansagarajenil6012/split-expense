@@ -88,6 +88,7 @@ export const settlementsApi = {
   reject: (groupId, settlementId) => apiClient.patch(`/groups/${groupId}/settlements/${settlementId}/reject`),
   reverse: (groupId, settlementId, data) => apiClient.patch(`/groups/${groupId}/settlements/${settlementId}/reverse`, data),
   remind: (groupId, data) => apiClient.post(`/groups/${groupId}/settlements/remind`, data),
+  getLedger: (groupId, params) => apiClient.get(`/groups/${groupId}/ledger`, { params }),
 };
 
 export const reportsApi = {

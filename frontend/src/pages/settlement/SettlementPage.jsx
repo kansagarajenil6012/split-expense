@@ -4,7 +4,7 @@ import {
   Box, Typography, Grid2 as Grid, Card, CardContent, Button, List, ListItem,
   ListItemText, Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, MenuItem, Alert, Chip, Tabs, Tab, Stack, IconButton, Tooltip,
-  Menu, Checkbox, FormControlLabel
+  Menu, Checkbox, FormControlLabel, CircularProgress
 } from '@mui/material';
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import CancelRoundedIcon from '@mui/icons-material/CancelRounded';
@@ -20,6 +20,7 @@ import { getErrorMessage } from '../../services/api-client.js';
 import { useAuthStore } from '../../store/auth.store.js';
 import { useUIStore } from '../../store/ui.store.js';
 import { exportToExcel, exportToPDF, exportToCSV, generateBalancesExportData } from '../../utils/exportEngine.js';
+import LedgerTab from './LedgerTab.jsx';
 
 export default function SettlementPage() {
   const { groupId } = useParams();
@@ -60,7 +61,7 @@ export default function SettlementPage() {
     setReminderMessage(`Friendly reminder to settle outstanding balance of ${formatCurrency(s.amount, group?.currency)}.`);
   };
 
-  const { data: suggestions } = useQuery({
+  const { data: suggestions, isLoading: isLoadingSuggestions } = useQuery({
     queryKey: ['suggestions', groupId],
     queryFn: async () => {
       const { data } = await settlementsApi.getSuggestions(groupId);
@@ -68,7 +69,7 @@ export default function SettlementPage() {
     },
   });
 
-  const { data: settlementsData } = useQuery({
+  const { data: settlementsData, isLoading: isLoadingSettlements } = useQuery({
     queryKey: ['settlements', groupId],
     queryFn: async () => {
       const { data } = await settlementsApi.list(groupId, { limit: 100 });
@@ -76,7 +77,7 @@ export default function SettlementPage() {
     },
   });
 
-  const { data: balances } = useQuery({
+  const { data: balances, isLoading: isLoadingBalances } = useQuery({
     queryKey: ['balances', groupId],
     queryFn: async () => {
       const { data } = await settlementsApi.getBalances(groupId);
@@ -237,6 +238,14 @@ export default function SettlementPage() {
   const pendingRequests = settlements.filter(s => s.status === 'requested');
   const completedSettlements = settlements.filter(s => s.status !== 'requested');
 
+  if (isLoadingSuggestions || isLoadingSettlements || isLoadingBalances) {
+    return (
+      <Box sx={{ p: 8, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
+
   return (
     <Box>
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 3 }}>
@@ -244,6 +253,7 @@ export default function SettlementPage() {
         <Tab label={`Pending Approval (${pendingRequests.length})`} />
         <Tab label="History" />
         <Tab label="Balances" />
+        <Tab label="Statement" />
       </Tabs>
 
       {/* Suggestions Tab */}
@@ -299,16 +309,28 @@ export default function SettlementPage() {
                             </>
                           )}
                           {isCreditorMe && (
-                            <Button
-                              variant="outlined"
-                              color="secondary"
-                              size="small"
-                              onClick={() => handleOpenReminderDialog(s)}
-                              startIcon={<NotificationsActiveRoundedIcon />}
-                              disabled={group?.is_archived}
-                            >
-                              Send Reminder
-                            </Button>
+                            <>
+                              <Button
+                                variant="contained"
+                                color="success"
+                                size="small"
+                                onClick={() => handleOpenSettleDialog(s, false)}
+                                startIcon={<CheckCircleRoundedIcon />}
+                                disabled={group?.is_archived}
+                              >
+                                Mark as Received
+                              </Button>
+                              <Button
+                                variant="outlined"
+                                color="secondary"
+                                size="small"
+                                onClick={() => handleOpenReminderDialog(s)}
+                                startIcon={<NotificationsActiveRoundedIcon />}
+                                disabled={group?.is_archived}
+                              >
+                                Send Reminder
+                              </Button>
+                            </>
                           )}
                           {!isDebtorMe && !isCreditorMe && (
                             <Button
@@ -533,6 +555,11 @@ export default function SettlementPage() {
             })}
           </Grid>
         </Box>
+      )}
+
+      {/* Ledger Statement Tab */}
+      {tab === 4 && (
+        <LedgerTab groupId={groupId} currentUser={currentUser} />
       )}
 
       {/* Settle Dialog */}

@@ -63,7 +63,7 @@ export default function ExpensesPage() {
   const expenses = data?.data || [];
 
   const filteredExpenses = expenses.filter(e => {
-    const matchesSearch = e.title.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = (e.title || '').toLowerCase().includes(searchTerm.toLowerCase());
     const matchesCat = categoryFilter === 'all' || e.category_id === categoryFilter;
     
     // Tab mapping (Filter out drafts or show drafts only)

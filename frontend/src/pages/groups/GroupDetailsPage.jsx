@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useOutletContext, useNavigate } from 'react-router-dom';
 import {
   Box, Grid2 as Grid, Card, CardContent, Typography, Button, Stack, Chip,
@@ -22,11 +22,19 @@ import ArchiveRoundedIcon from '@mui/icons-material/ArchiveRounded';
 import UnarchiveRoundedIcon from '@mui/icons-material/UnarchiveRounded';
 import FileCopyRoundedIcon from '@mui/icons-material/FileCopyRounded';
 import SwapHorizRoundedIcon from '@mui/icons-material/SwapHorizRounded';
+import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded';
+import PictureAsPdfRoundedIcon from '@mui/icons-material/PictureAsPdfRounded';
+import TableChartRoundedIcon from '@mui/icons-material/TableChartRounded';
+import NProgress from 'nprogress';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { QRCodeSVG } from 'qrcode.react';
-import { settlementsApi, groupsApi } from '../../services/api.js';
+import { settlementsApi, groupsApi, expensesApi } from '../../services/api.js';
 import { formatCurrency, getBalanceLabel, GROUP_TYPES } from '../../utils/formatters.js';
+import { generateGroupPDFReport, generateGroupExcelReport } from '../../utils/reportGenerator.js';
+import DribbbleReportTemplate from '../../components/reports/DribbbleReportTemplate.jsx';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
 import { useAuthStore } from '../../store/auth.store.js';
 import { useUIStore } from '../../store/ui.store.js';
 import { getErrorMessage } from '../../services/api-client.js';
@@ -44,6 +52,10 @@ export default function GroupDetailsPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  
+  const [hiddenReportData, setHiddenReportData] = useState(null);
+  const reportRef = useRef(null);
   
   const [inviteEmail, setInviteEmail] = useState('');
   const [error, setError] = useState('');
@@ -225,6 +237,95 @@ export default function GroupDetailsPage() {
     });
   };
 
+  const handleExport = async (format) => {
+    try {
+      setExportOpen(false);
+      NProgress.start();
+      showToast(`Generating ${format.toUpperCase()} report...`, 'info');
+
+      // Fetch all expenses by looping pages if necessary
+      let allExpenses = [];
+      let page = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const { data } = await expensesApi.list(groupId, { limit: 100, page });
+        allExpenses = allExpenses.concat(data.data);
+        if (data.data.length < 100) hasMore = false;
+        else page++;
+      }
+
+      const reportData = {
+        group,
+        members: members || [],
+        balances: balances || [],
+        expenses: allExpenses
+      };
+
+      if (format === 'pdf') {
+        generateGroupPDFReport(reportData);
+      } else {
+        generateGroupExcelReport(reportData);
+      }
+      showToast('Export successful', 'success');
+      setExportOpen(false);
+    } catch (err) {
+      showToast('Failed to export data', 'error');
+    } finally {
+      NProgress.done();
+    }
+  };
+
+  const handleExportDribbble = async () => {
+    try {
+      NProgress.start();
+      showToast('Preparing stunning Dribbble PDF...', 'info');
+      // Fetch all expenses
+      let allExpenses = [];
+      let page = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const { data } = await expensesApi.list(groupId, { limit: 100, page });
+        allExpenses = allExpenses.concat(data.data);
+        if (data.data.length < 100) hasMore = false;
+        else page++;
+      }
+      setHiddenReportData({ group, members, balances, allExpenses });
+    } catch (err) {
+      showToast('Failed to fetch data for export', 'error');
+      NProgress.done();
+    }
+  };
+
+  useEffect(() => {
+    if (hiddenReportData && reportRef.current) {
+      const generatePDF = async () => {
+        try {
+          await new Promise(res => setTimeout(res, 500)); // wait for render
+          const canvas = await html2canvas(reportRef.current, {
+            scale: 2,
+            useCORS: true,
+            backgroundColor: '#f8fafc',
+          });
+          const imgData = canvas.toDataURL('image/png');
+          const pdf = new jsPDF({
+            orientation: 'portrait',
+            unit: 'px',
+            format: [canvas.width, canvas.height]
+          });
+          pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
+          pdf.save(`${group?.name || 'Group'}_Report.pdf`);
+          showToast('PDF downloaded successfully!');
+        } catch (err) {
+          showToast('Error generating PDF', 'error');
+        } finally {
+          setHiddenReportData(null);
+          NProgress.done();
+        }
+      };
+      generatePDF();
+    }
+  }, [hiddenReportData, group, showToast]);
+
   return (
     <Box>
       {/* Dynamic Header with Cover Image & Tags */}
@@ -378,6 +479,16 @@ export default function GroupDetailsPage() {
               sx={{ width: { xs: '100%', sm: 'auto' } }}
             >
               Clone Group
+            </Button>
+            <Button
+              variant="outlined"
+              startIcon={<DownloadRoundedIcon />}
+              onClick={handleExportDribbble}
+              size="large"
+              color="secondary"
+              sx={{ width: { xs: '100%', sm: 'auto' } }}
+            >
+              Export Report
             </Button>
             <Stack direction="row" spacing={1} sx={{ alignSelf: { xs: 'flex-start', sm: 'center' } }}>
               {isAdmin && (
@@ -643,6 +754,52 @@ export default function GroupDetailsPage() {
           </Button>
         </DialogActions>
       </Dialog>
+      {/* Export Report Modal */}
+      <Dialog open={exportOpen} onClose={() => setExportOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800 }}>Export Group Report</DialogTitle>
+        <DialogContent>
+          <Typography color="text.secondary" sx={{ mb: 3 }}>
+            Choose the format to download a comprehensive report including group totals, member balances, and all detailed expenses.
+          </Typography>
+          <Stack spacing={2}>
+            <Button 
+              variant="outlined" 
+              size="large" 
+              startIcon={<PictureAsPdfRoundedIcon sx={{ color: '#ef4444' }} />}
+              onClick={() => handleExport('pdf')}
+              sx={{ justifyContent: 'flex-start', py: 1.5, borderColor: 'divider', color: 'text.primary' }}
+            >
+              Download PDF Document
+            </Button>
+            <Button 
+              variant="outlined" 
+              size="large" 
+              startIcon={<TableChartRoundedIcon sx={{ color: '#10b981' }} />}
+              onClick={() => handleExport('excel')}
+              sx={{ justifyContent: 'flex-start', py: 1.5, borderColor: 'divider', color: 'text.primary' }}
+            >
+              Download Excel Spreadsheet
+            </Button>
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ p: 2, pt: 0 }}>
+          <Button onClick={() => setExportOpen(false)} color="inherit">Cancel</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Hidden Dribbble Template for PDF Rendering */}
+      {hiddenReportData && (
+        <Box sx={{ position: 'absolute', left: '-9999px', top: '-9999px' }}>
+          <DribbbleReportTemplate 
+            ref={reportRef}
+            group={hiddenReportData.group}
+            members={hiddenReportData.members}
+            balances={hiddenReportData.balances}
+            expenses={hiddenReportData.allExpenses}
+          />
+        </Box>
+      )}
+
     </Box>
   );
 }

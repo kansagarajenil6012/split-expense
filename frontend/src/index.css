@@ -98,3 +98,18 @@ button, a, input, select, textarea {
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
+
+/* NProgress Theme Override */
+#nprogress .bar {
+  background: #a78bfa !important;
+  height: 3px !important;
+}
+
+#nprogress .peg {
+  box-shadow: 0 0 10px #a78bfa, 0 0 5px #a78bfa !important;
+}
+
+#nprogress .spinner-icon {
+  border-top-color: #a78bfa !important;
+  border-left-color: #a78bfa !important;
+}

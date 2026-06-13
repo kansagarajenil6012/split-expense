@@ -881,22 +881,22 @@ export default function AddExpensePage() {
             )}
 
             <Box display="flex" gap={2} mt={4} sx={{ width: '100%' }}>
-              <Button variant="outlined" onClick={() => navigate(`/groups/${groupId}/expenses`)}>Cancel</Button>
+              <Button variant="outlined" onClick={() => navigate(`/groups/${groupId}/expenses`)} disabled={createMutation.isPending || isSubmitting}>Cancel</Button>
               <Button
                 variant="outlined"
                 color="secondary"
-                disabled={isSubmitting || !validation.isValid}
+                disabled={createMutation.isPending || isSubmitting || !validation.isValid}
                 onClick={handleSubmit((data) => handleCreateSubmit(data, true))}
               >
-                Save as Draft
+                {createMutation.isPending ? 'Saving...' : 'Save as Draft'}
               </Button>
               <Button
                 type="button"
                 variant="contained"
-                disabled={isSubmitting || !validation.isValid}
+                disabled={createMutation.isPending || isSubmitting || !validation.isValid}
                 onClick={handleSubmit((data) => handleCreateSubmit(data, false))}
               >
-                {isSubmitting ? 'Saving...' : 'Add Expense'}
+                {createMutation.isPending ? 'Saving...' : 'Add Expense'}
               </Button>
             </Box>
           </Box>

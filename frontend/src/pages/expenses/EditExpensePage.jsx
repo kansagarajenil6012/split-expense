@@ -909,9 +909,9 @@ export default function EditExpensePage() {
             )}
 
             <Box display="flex" gap={2} mt={4}>
-              <Button variant="outlined" onClick={() => navigate(`/groups/${groupId}/expenses`)}>Cancel</Button>
-              <Button type="submit" variant="contained" disabled={isSubmitting || !validation.isValid}>
-                {isSubmitting ? 'Saving...' : 'Save Changes'}
+              <Button variant="outlined" onClick={() => navigate(`/groups/${groupId}/expenses`)} disabled={updateMutation.isPending || isSubmitting}>Cancel</Button>
+              <Button type="submit" variant="contained" disabled={updateMutation.isPending || isSubmitting || !validation.isValid}>
+                {updateMutation.isPending ? 'Saving...' : 'Save Changes'}
               </Button>
             </Box>
           </Box>

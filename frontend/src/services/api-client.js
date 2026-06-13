@@ -1,5 +1,10 @@
 import axios from 'axios';
+import NProgress from 'nprogress';
+import 'nprogress/nprogress.css';
 import { useAuthStore } from '../store/auth.store.js';
+
+// Configure NProgress
+NProgress.configure({ showSpinner: false, speed: 400, minimum: 0.1 });
 
 const API_URL = import.meta.env.VITE_API_URL || '/api/v1';
 
@@ -9,9 +14,13 @@ const apiClient = axios.create({
 });
 
 apiClient.interceptors.request.use((config) => {
+  NProgress.start();
   const token = useAuthStore.getState().accessToken;
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
+}, (error) => {
+  NProgress.done();
+  return Promise.reject(error);
 });
 
 let isRefreshing = false;
@@ -26,8 +35,12 @@ const processQueue = (error, token = null) => {
 };
 
 apiClient.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    NProgress.done();
+    return response;
+  },
   async (error) => {
+    NProgress.done();
     const originalRequest = error.config;
 
     if (error.response?.status === 401 && !originalRequest._retry) {
